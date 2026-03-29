@@ -1,4 +1,5 @@
 const std = @import("std");
+const wayland_build = @import("wayland");
 
 // Although this function looks imperative, it does not perform the build
 // directly and instead it mutates the build graph (`b`) that will be then
@@ -58,6 +59,66 @@ pub fn build(b: *std.Build) void {
     // If neither case applies to you, feel free to delete the declaration you
     // don't need and to put everything under a single module.
     const wlroots = b.dependency("wlroots", .{});
+    const xkbcommon = b.dependency("xkbcommon", .{});
+    const pixman = b.dependency("pixman", .{});
+
+    const mod_wlroots = wlroots.module("wlroots");
+    mod_wlroots.resolved_target = target;
+    mod_wlroots.optimize = optimize;
+    mod_wlroots.link_libc = true;
+    mod_wlroots.linkSystemLibrary("wlroots-0.19", .{});
+    mod_wlroots.linkSystemLibrary("pixman-1", .{});
+
+    const mod_xkbcommon = xkbcommon.module("xkbcommon");
+    mod_xkbcommon.resolved_target = target;
+    mod_xkbcommon.optimize = optimize;
+    mod_xkbcommon.link_libc = true;
+    mod_xkbcommon.linkSystemLibrary("xkbcommon", .{});
+
+    const mod_pixman = pixman.module("pixman");
+    mod_pixman.resolved_target = target;
+    mod_pixman.optimize = optimize;
+    mod_pixman.link_libc = true;
+    mod_pixman.linkSystemLibrary("pixman-1", .{});
+
+    const scanner = wayland_build.Scanner.create(b, .{});
+
+    scanner.addSystemProtocol("stable/xdg-shell/xdg-shell.xml");
+    scanner.addSystemProtocol("unstable/pointer-constraints/pointer-constraints-unstable-v1.xml");
+    scanner.addSystemProtocol("unstable/pointer-gestures/pointer-gestures-unstable-v1.xml");
+    scanner.addSystemProtocol("unstable/xdg-decoration/xdg-decoration-unstable-v1.xml");
+    scanner.addSystemProtocol("unstable/tablet/tablet-unstable-v2.xml");
+    scanner.addSystemProtocol("staging/ext-session-lock/ext-session-lock-v1.xml");
+    scanner.addSystemProtocol("unstable/linux-dmabuf/linux-dmabuf-unstable-v1.xml");
+    scanner.addSystemProtocol("staging/cursor-shape/cursor-shape-v1.xml");
+    scanner.addSystemProtocol("staging/tearing-control/tearing-control-v1.xml");
+    scanner.addSystemProtocol("staging/content-type/content-type-v1.xml");
+    scanner.addSystemProtocol("staging/ext-image-copy-capture/ext-image-copy-capture-v1.xml");
+
+    scanner.generate("wl_compositor", 4);
+    scanner.generate("wl_subcompositor", 1);
+    scanner.generate("wl_shm", 1);
+    scanner.generate("wl_output", 4);
+    scanner.generate("wl_seat", 7);
+    scanner.generate("wl_data_device_manager", 3);
+    scanner.generate("xdg_wm_base", 2);
+    scanner.generate("ext_session_lock_manager_v1", 1);
+    scanner.generate("ext_image_copy_capture_manager_v1", 1);
+    scanner.generate("zwp_pointer_gestures_v1", 3);
+    scanner.generate("zwp_pointer_constraints_v1", 1);
+    scanner.generate("zxdg_decoration_manager_v1", 1);
+    scanner.generate("zwp_tablet_manager_v2", 1);
+    scanner.generate("zwp_linux_dmabuf_v1", 4);
+    scanner.generate("wp_cursor_shape_manager_v1", 1);
+    scanner.generate("wp_tearing_control_manager_v1", 1);
+    scanner.generate("wp_content_type_manager_v1", 1);
+
+    const mod_wayland = b.createModule(.{ .root_source_file = scanner.result });
+
+    // Provide the xkbcommon, pixman, and wayland modules to wlroots
+    mod_wlroots.addImport("xkbcommon", mod_xkbcommon);
+    mod_wlroots.addImport("pixman", mod_pixman);
+    mod_wlroots.addImport("wayland", mod_wayland);
 
     const exe = b.addExecutable(.{
         .name = "sailer",
@@ -76,11 +137,18 @@ pub fn build(b: *std.Build) void {
             // root module.
             .imports = &.{
                 .{ .name = "sailer", .module = mod },
-                .{ .name = "wlroots", .module = wlroots.module("wlroots") },
-                // wayland and xkbcommon might be exported by wlroots, or we need to add them separately
+                .{ .name = "wlroots", .module = mod_wlroots },
+                .{ .name = "wayland", .module = mod_wayland },
+                .{ .name = "xkbcommon", .module = mod_xkbcommon },
             },
         }),
     });
+
+    exe.linkLibC();
+    exe.linkSystemLibrary("wlroots-0.19");
+    exe.linkSystemLibrary("wayland-server");
+    exe.linkSystemLibrary("xkbcommon");
+    exe.linkSystemLibrary("pixman-1");
 
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
