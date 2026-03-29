@@ -62,6 +62,54 @@ pub const Workspace = struct {
         }
     }
 
+    pub fn focusRelative(self: *Workspace, delta: i32) void {
+        if (self.views.link.next == &self.views.link) return;
+
+        // Find focused view
+        var focused: ?*View.Toplevel = null;
+        if (self.server.seat.keyboard_state.focused_surface) |surf| {
+            if (wlr.XdgSurface.tryFromWlrSurface(surf)) |xdg_surf| {
+                focused = View.fromXdgSurface(xdg_surf);
+            }
+        }
+
+        if (focused) |f| {
+            var target_link: *wl.list.Link = undefined;
+            if (delta > 0) {
+                target_link = f.link.next.?;
+                if (target_link == &self.views.link) target_link = self.views.link.next.?;
+            } else {
+                target_link = f.link.prev.?;
+                if (target_link == &self.views.link) target_link = self.views.link.prev.?;
+            }
+            const next_v: *View.Toplevel = @fieldParentPtr("link", target_link);
+            self.server.focusView(next_v, next_v.xdg_toplevel.base.surface);
+        } else {
+            // Just focus head
+            const head = self.views.link.next.?;
+            const toplevel: *View.Toplevel = @fieldParentPtr("link", head);
+            self.server.focusView(toplevel, toplevel.xdg_toplevel.base.surface);
+        }
+    }
+
+    pub fn reorderView(self: *Workspace, view: *View.Toplevel, delta: i32) void {
+        const link = &view.link;
+        if (delta > 0) {
+            const next = link.next.?;
+            if (next != &self.views.link) {
+                link.remove();
+                next.insert(link);
+            }
+        } else {
+            const prev = link.prev.?;
+            if (prev != &self.views.link) {
+                link.remove();
+                prev.prev.?.insert(link);
+            }
+        }
+        self.arrange();
+    }
+
     pub fn setVisible(self: *Workspace, output: ?*@import("Output.zig").Output) void {
         self.visible_on = output;
         if (output != null) {

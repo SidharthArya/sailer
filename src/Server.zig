@@ -7,7 +7,7 @@ const Output = @import("Output.zig").Output;
 const View = @import("View.zig");
 const Toplevel = View.Toplevel;
 const Popup = View.Popup;
-const Keyboard = @import("Keyboard.zig").Keyboard;
+const KeyboardDevice = @import("Keyboard.zig").KeyboardDevice;
 const Workspace = @import("Workspace.zig").Workspace;
 
 pub const Server = struct {
@@ -32,7 +32,7 @@ pub const Server = struct {
     new_input: wl.Listener(*wlr.InputDevice) = .init(Server.newInput),
     request_set_cursor: wl.Listener(*wlr.Seat.event.RequestSetCursor) = .init(Server.requestSetCursor),
     request_set_selection: wl.Listener(*wlr.Seat.event.RequestSetSelection) = .init(Server.requestSetSelection),
-    keyboards: wl.list.Head(Keyboard, .link) = undefined,
+    keyboards: wl.list.Head(KeyboardDevice, .link) = undefined,
 
     cursor: *wlr.Cursor,
     cursor_mgr: *wlr.XcursorManager,
@@ -265,7 +265,7 @@ pub const Server = struct {
             if (server.output_layout.get(output.wlr_output)) |l_output| {
                 var box: wlr.Box = undefined;
                 server.output_layout.getBox(l_output.output, &box);
-                const view_width = @divTrunc(box.width * 70, 100);
+                const view_width = @divTrunc(box.width * toplevel.width_percent, 100);
                 toplevel.workspace.scroll_offset_x = toplevel.x - @divTrunc(box.width - view_width, 2);
                 toplevel.workspace.arrange();
             }
@@ -275,17 +275,19 @@ pub const Server = struct {
     fn newInput(listener: *wl.Listener(*wlr.InputDevice), device: *wlr.InputDevice) void {
         const server: *Server = @fieldParentPtr("new_input", listener);
         switch (device.type) {
-            .keyboard => Keyboard.create(server, device) catch |err| {
+            .keyboard => KeyboardDevice.create(server, device) catch |err| {
                 std.log.err("failed to create keyboard: {}", .{err});
                 return;
             },
-            .pointer => server.cursor.attachInputDevice(device),
+            .pointer => wlr.Cursor.attachInputDevice(server.cursor, device),
             else => {},
         }
 
-        server.seat.setCapabilities(.{
+        const has_keyboard = server.keyboards.link.next != &server.keyboards.link;
+
+        wlr.Seat.setCapabilities(server.seat, .{
             .pointer = true,
-            .keyboard = server.keyboards.length() > 0,
+            .keyboard = has_keyboard,
         });
     }
 
@@ -295,7 +297,7 @@ pub const Server = struct {
     ) void {
         const server: *Server = @fieldParentPtr("request_set_cursor", listener);
         if (event.seat_client == server.seat.pointer_state.focused_client)
-            server.cursor.setSurface(event.surface, event.hotspot_x, event.hotspot_y);
+            wlr.Cursor.setSurface(server.cursor, event.surface, event.hotspot_x, event.hotspot_y);
     }
 
     fn requestSetSelection(
@@ -410,90 +412,116 @@ pub const Server = struct {
         wlr.Seat.pointerNotifyFrame(server.seat);
     }
 
-    pub fn handleKeybind(server: *Server, key: xkb.Keysym) bool {
+    pub fn switchToWorkspace(server: *Server, index: u32) void {
+        if (index >= server.workspaces.len) return;
+        const target_ws = server.workspaces[index];
+        if (server.focused_workspace == target_ws) return;
+
+        const current_ws = server.focused_workspace;
+        const focused_output = current_ws.visible_on;
+
+        if (target_ws.visible_on) |other_output| {
+            // Swap workspaces between outputs
+            current_ws.setVisible(other_output);
+            target_ws.setVisible(focused_output);
+        } else if (focused_output) |output| {
+            current_ws.setVisible(null);
+            target_ws.setVisible(output);
+        }
+
+        server.focused_workspace = target_ws;
+
+        // Focus topmost window in new workspace
+        if (target_ws.views.link.next != &target_ws.views.link) {
+            const head = target_ws.views.link.next.?;
+            const toplevel: *Toplevel = @fieldParentPtr("link", head);
+            server.focusView(toplevel, toplevel.xdg_toplevel.base.surface);
+        } else {
+            wlr.Seat.keyboardNotifyClearFocus(server.seat);
+        }
+    }
+
+    pub fn handleKeybind(server: *Server, key: xkb.Keysym, mods: wlr.Keyboard.ModifierMask) bool {
         switch (@intFromEnum(key)) {
-            // Exit the compositor
             xkb.Keysym.Escape => server.wl_server.terminate(),
-            // Switch workspaces 1-9
-            xkb.Keysym.@"1"...xkb.Keysym.@"9" => {
-                const index = @as(usize, @intFromEnum(key) - xkb.Keysym.@"1");
-                const target_ws = server.workspaces[index];
-                if (server.focused_workspace != target_ws) {
-                    const current_ws = server.focused_workspace;
-                    const focused_output = current_ws.visible_on;
-
-                    if (target_ws.visible_on) |other_output| {
-                        // Target workspace is visible on another output. Swap them!
-                        current_ws.setVisible(other_output);
-                        target_ws.setVisible(focused_output);
-                    } else {
-                        // Target workspace is hidden. Show it on the focused output.
-                        current_ws.setVisible(null);
-                        target_ws.setVisible(focused_output);
-                    }
-
-                    server.focused_workspace = target_ws;
-
-                    // Focus the topmost window in the new workspace if it exists
-                    const views = &server.focused_workspace.views;
-                    if (views.length() > 0) {
-                        const toplevel: *Toplevel = @fieldParentPtr("link", views.link.prev.?);
-                        server.focusView(toplevel, toplevel.xdg_toplevel.base.surface);
-                    } else {
-                        wlr.Seat.keyboardNotifyClearFocus(server.seat);
-                    }
-                }
+            xkb.Keysym.Return => {
+                _ = std.process.Child.run(.{
+                    .allocator = std.heap.c_allocator,
+                    .argv = &[_][]const u8{"foot"},
+                }) catch return true;
+                return true;
             },
-            // Focus the next toplevel in the workspace stack
-            xkb.Keysym.j => {
-                const views = &server.focused_workspace.views;
-                if (views.length() < 2) return true;
-                const toplevel: *Toplevel = @fieldParentPtr("link", views.link.next.?);
-                server.focusView(toplevel, toplevel.xdg_toplevel.base.surface);
-            },
-            xkb.Keysym.k => {
-                const views = &server.focused_workspace.views;
-                if (views.length() < 2) return true;
-                const toplevel: *Toplevel = @fieldParentPtr("link", views.link.prev.?);
-                server.focusView(toplevel, toplevel.xdg_toplevel.base.surface);
-            },
-            // Niri style horizontal navigation
             xkb.Keysym.h => {
-                const views = &server.focused_workspace.views;
-                if (views.length() < 2) return true;
-
-                const surface = server.seat.keyboard_state.focused_surface orelse return true;
-                const xdg_surface = wlr.XdgSurface.tryFromWlrSurface(surface) orelse return true;
-                const current: *Toplevel = @ptrCast(@alignCast(xdg_surface.data.?));
-
-                // Ribbon order (Left-to-Right): Tail (prev) -> Head (next)
-                // So "Left" is towards Tail (prev).
-                if (current.link.prev) |prev| {
-                    if (prev != &views.link) {
-                        const toplevel: *Toplevel = @fieldParentPtr("link", prev);
-                        server.focusView(toplevel, toplevel.xdg_toplevel.base.surface);
+                if (mods.ctrl) {
+                    if (mods.shift) {
+                        // Resize shrink
+                        if (server.seat.keyboard_state.focused_surface) |surface| {
+                            if (wlr.XdgSurface.tryFromWlrSurface(surface)) |xdg_surface| {
+                                if (View.fromXdgSurface(xdg_surface)) |t| {
+                                    t.width_percent = @max(10, t.width_percent - 5);
+                                    t.workspace.arrange();
+                                }
+                            }
+                        }
+                    } else {
+                        // Focus left
+                        server.focused_workspace.focusRelative(-1);
                     }
+                    return true;
                 }
             },
             xkb.Keysym.l => {
-                const views = &server.focused_workspace.views;
-                if (views.length() < 2) return true;
-
-                const surface = server.seat.keyboard_state.focused_surface orelse return true;
-                const xdg_surface = wlr.XdgSurface.tryFromWlrSurface(surface) orelse return true;
-                const current: *Toplevel = @ptrCast(@alignCast(xdg_surface.data.?));
-
-                // Ribbon order (Left-to-Right): Tail (prev) -> Head (next)
-                // So "Right" is towards Head (next).
-                if (current.link.next) |next| {
-                    if (next != &views.link) {
-                        const toplevel: *Toplevel = @fieldParentPtr("link", next);
-                        server.focusView(toplevel, toplevel.xdg_toplevel.base.surface);
+                if (mods.ctrl) {
+                    if (mods.shift) {
+                        // Resize expand
+                        if (server.seat.keyboard_state.focused_surface) |surface| {
+                            if (wlr.XdgSurface.tryFromWlrSurface(surface)) |xdg_surface| {
+                                if (View.fromXdgSurface(xdg_surface)) |t| {
+                                    t.width_percent = @min(100, t.width_percent + 5);
+                                    t.workspace.arrange();
+                                }
+                            }
+                        }
+                    } else {
+                        // Focus right
+                        server.focused_workspace.focusRelative(1);
                     }
+                    return true;
                 }
             },
-            else => return false,
+            xkb.Keysym.j => {
+                if (mods.ctrl and mods.shift) {
+                    if (server.seat.keyboard_state.focused_surface) |surface| {
+                        if (wlr.XdgSurface.tryFromWlrSurface(surface)) |xdg_surface| {
+                            if (View.fromXdgSurface(xdg_surface)) |t| {
+                                t.workspace.reorderView(t, -1);
+                            }
+                        }
+                    }
+                    return true;
+                }
+            },
+            xkb.Keysym.k => {
+                if (mods.ctrl and mods.shift) {
+                    if (server.seat.keyboard_state.focused_surface) |surface| {
+                        if (wlr.XdgSurface.tryFromWlrSurface(surface)) |xdg_surface| {
+                            if (View.fromXdgSurface(xdg_surface)) |t| {
+                                t.workspace.reorderView(t, 1);
+                            }
+                        }
+                    }
+                    return true;
+                }
+            },
+            xkb.Keysym.@"1", xkb.Keysym.@"2", xkb.Keysym.@"3", xkb.Keysym.@"4", xkb.Keysym.@"5", xkb.Keysym.@"6", xkb.Keysym.@"7", xkb.Keysym.@"8", xkb.Keysym.@"9" => {
+                if (mods.ctrl) {
+                    const ws_idx = (@intFromEnum(key) - @as(u32, xkb.Keysym.@"1"));
+                    server.switchToWorkspace(ws_idx);
+                    return true;
+                }
+            },
+            else => {},
         }
-        return true;
+        return false;
     }
 };

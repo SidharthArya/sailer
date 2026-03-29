@@ -115,3 +115,8 @@ pub const Popup = struct {
         std.heap.c_allocator.destroy(popup);
     }
 };
+
+pub fn fromXdgSurface(xdg_surface: *wlr.XdgSurface) ?*Toplevel {
+    const scene_tree = @as(?*wlr.SceneTree, @ptrCast(@alignCast(xdg_surface.data))) orelse return null;
+    return @as(?*Toplevel, @ptrCast(@alignCast(scene_tree.node.data)));
+}
