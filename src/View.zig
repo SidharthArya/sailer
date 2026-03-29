@@ -5,12 +5,14 @@ const Server = @import("Server.zig").Server;
 
 pub const Toplevel = struct {
     server: *Server,
+    workspace: *@import("Workspace.zig").Workspace,
     link: wl.list.Link = undefined,
     xdg_toplevel: *wlr.XdgToplevel,
     scene_tree: *wlr.SceneTree,
 
     x: i32 = 0,
     y: i32 = 0,
+    width_percent: i32 = 70,
 
     commit: wl.Listener(*wlr.Surface) = .init(Toplevel.handleCommit),
     map: wl.Listener(void) = .init(Toplevel.handleMap),
@@ -22,20 +24,24 @@ pub const Toplevel = struct {
     fn handleCommit(listener: *wl.Listener(*wlr.Surface), _: *wlr.Surface) void {
         const toplevel: *Toplevel = @fieldParentPtr("commit", listener);
         if (toplevel.xdg_toplevel.base.initial_commit) {
-            _ = toplevel.xdg_toplevel.setSize(0, 0);
+            _ = wlr.XdgToplevel.setSize(toplevel.xdg_toplevel, 0, 0);
         }
     }
 
     fn handleMap(listener: *wl.Listener(void)) void {
         const toplevel: *Toplevel = @fieldParentPtr("map", listener);
-        // Currently it adds to server.toplevels, we will need to change this
-        toplevel.server.focused_workspace.views.prepend(toplevel);
+        toplevel.workspace.views.prepend(toplevel);
         toplevel.server.focusView(toplevel, toplevel.xdg_toplevel.base.surface);
+        toplevel.workspace.arrange();
     }
 
     fn handleUnmap(listener: *wl.Listener(void)) void {
         const toplevel: *Toplevel = @fieldParentPtr("unmap", listener);
+        if (toplevel.server.grabbed_view == toplevel) {
+            toplevel.server.grabbed_view = null;
+        }
         toplevel.link.remove();
+        toplevel.workspace.arrange();
     }
 
     fn handleDestroy(listener: *wl.Listener(void)) void {

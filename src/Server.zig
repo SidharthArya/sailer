@@ -169,6 +169,7 @@ pub const Server = struct {
 
         toplevel.* = .{
             .server = server,
+            .workspace = server.focused_workspace,
             .xdg_toplevel = xdg_toplevel,
             .scene_tree = server.focused_workspace.scene_tree.createSceneXdgSurface(xdg_surface) catch {
                 std.heap.c_allocator.destroy(toplevel);
@@ -245,7 +246,7 @@ pub const Server = struct {
         if (server.seat.keyboard_state.focused_surface) |previous_surface| {
             if (previous_surface == surface) return;
             if (wlr.XdgSurface.tryFromWlrSurface(previous_surface)) |xdg_surface| {
-                _ = xdg_surface.role_data.toplevel.?.setActivated(false);
+                _ = wlr.XdgToplevel.setActivated(xdg_surface.role_data.toplevel.?, false);
             }
         }
 
@@ -253,14 +254,22 @@ pub const Server = struct {
         toplevel.link.remove();
         server.focused_workspace.views.prepend(toplevel);
 
-        _ = toplevel.xdg_toplevel.setActivated(true);
+        _ = wlr.XdgToplevel.setActivated(toplevel.xdg_toplevel, true);
 
-        const wlr_keyboard = server.seat.getKeyboard() orelse return;
-        server.seat.keyboardNotifyEnter(
-            surface,
-            wlr_keyboard.keycodes[0..wlr_keyboard.num_keycodes],
-            &wlr_keyboard.modifiers,
-        );
+        if (server.seat.keyboard_state.keyboard) |kbd| {
+            wlr.Seat.keyboardNotifyEnter(server.seat, surface, kbd.keycodes[0..kbd.num_keycodes], &kbd.modifiers);
+        }
+
+        // Niri style scrolling: Center the focused view on its workspace visible output
+        if (toplevel.workspace.visible_on) |output| {
+            if (server.output_layout.get(output.wlr_output)) |l_output| {
+                var box: wlr.Box = undefined;
+                server.output_layout.getBox(l_output.output, &box);
+                const view_width = @divTrunc(box.width * 70, 100);
+                toplevel.workspace.scroll_offset_x = toplevel.x - @divTrunc(box.width - view_width, 2);
+                toplevel.workspace.arrange();
+            }
+        }
     }
 
     fn newInput(listener: *wl.Listener(*wlr.InputDevice), device: *wlr.InputDevice) void {
@@ -294,7 +303,7 @@ pub const Server = struct {
         event: *wlr.Seat.event.RequestSetSelection,
     ) void {
         const server: *Server = @fieldParentPtr("request_set_selection", listener);
-        server.seat.setSelection(event.source, event.serial);
+        wlr.Seat.setSelection(server.seat, event.source, event.serial);
     }
 
     fn cursorMotion(
@@ -318,11 +327,11 @@ pub const Server = struct {
     fn processCursorMotion(server: *Server, time_msec: u32) void {
         switch (server.cursor_mode) {
             .passthrough => if (server.viewAt(server.cursor.x, server.cursor.y)) |res| {
-                server.seat.pointerNotifyEnter(res.surface, res.sx, res.sy);
-                server.seat.pointerNotifyMotion(time_msec, res.sx, res.sy);
+                wlr.Seat.pointerNotifyEnter(server.seat, res.surface, res.sx, res.sy);
+                wlr.Seat.pointerNotifyMotion(server.seat, time_msec, res.sx, res.sy);
             } else {
                 server.cursor.setXcursor(server.cursor_mgr, "default");
-                server.seat.pointerClearFocus();
+                wlr.Seat.pointerClearFocus(server.seat);
             },
             .move => {
                 const toplevel = server.grabbed_view.?;
@@ -372,7 +381,7 @@ pub const Server = struct {
         event: *wlr.Pointer.event.Button,
     ) void {
         const server: *Server = @fieldParentPtr("cursor_button", listener);
-        _ = server.seat.pointerNotifyButton(event.time_msec, event.button, event.state);
+        _ = wlr.Seat.pointerNotifyButton(server.seat, event.time_msec, event.button, event.state);
         if (event.state == .released) {
             server.cursor_mode = .passthrough;
         } else if (server.viewAt(server.cursor.x, server.cursor.y)) |res| {
@@ -385,7 +394,8 @@ pub const Server = struct {
         event: *wlr.Pointer.event.Axis,
     ) void {
         const server: *Server = @fieldParentPtr("cursor_axis", listener);
-        server.seat.pointerNotifyAxis(
+        wlr.Seat.pointerNotifyAxis(
+            server.seat,
             event.time_msec,
             event.orientation,
             event.delta,
@@ -397,7 +407,7 @@ pub const Server = struct {
 
     fn cursorFrame(listener: *wl.Listener(*wlr.Cursor), _: *wlr.Cursor) void {
         const server: *Server = @fieldParentPtr("cursor_frame", listener);
-        server.seat.pointerNotifyFrame();
+        wlr.Seat.pointerNotifyFrame(server.seat);
     }
 
     pub fn handleKeybind(server: *Server, key: xkb.Keysym) bool {
@@ -430,7 +440,7 @@ pub const Server = struct {
                         const toplevel: *Toplevel = @fieldParentPtr("link", views.link.prev.?);
                         server.focusView(toplevel, toplevel.xdg_toplevel.base.surface);
                     } else {
-                        server.seat.keyboardClearFocus();
+                        wlr.Seat.keyboardNotifyClearFocus(server.seat);
                     }
                 }
             },
@@ -438,8 +448,49 @@ pub const Server = struct {
             xkb.Keysym.j => {
                 const views = &server.focused_workspace.views;
                 if (views.length() < 2) return true;
+                const toplevel: *Toplevel = @fieldParentPtr("link", views.link.next.?);
+                server.focusView(toplevel, toplevel.xdg_toplevel.base.surface);
+            },
+            xkb.Keysym.k => {
+                const views = &server.focused_workspace.views;
+                if (views.length() < 2) return true;
                 const toplevel: *Toplevel = @fieldParentPtr("link", views.link.prev.?);
                 server.focusView(toplevel, toplevel.xdg_toplevel.base.surface);
+            },
+            // Niri style horizontal navigation
+            xkb.Keysym.h => {
+                const views = &server.focused_workspace.views;
+                if (views.length() < 2) return true;
+
+                const surface = server.seat.keyboard_state.focused_surface orelse return true;
+                const xdg_surface = wlr.XdgSurface.tryFromWlrSurface(surface) orelse return true;
+                const current: *Toplevel = @ptrCast(@alignCast(xdg_surface.data.?));
+
+                // Ribbon order (Left-to-Right): Tail (prev) -> Head (next)
+                // So "Left" is towards Tail (prev).
+                if (current.link.prev) |prev| {
+                    if (prev != &views.link) {
+                        const toplevel: *Toplevel = @fieldParentPtr("link", prev);
+                        server.focusView(toplevel, toplevel.xdg_toplevel.base.surface);
+                    }
+                }
+            },
+            xkb.Keysym.l => {
+                const views = &server.focused_workspace.views;
+                if (views.length() < 2) return true;
+
+                const surface = server.seat.keyboard_state.focused_surface orelse return true;
+                const xdg_surface = wlr.XdgSurface.tryFromWlrSurface(surface) orelse return true;
+                const current: *Toplevel = @ptrCast(@alignCast(xdg_surface.data.?));
+
+                // Ribbon order (Left-to-Right): Tail (prev) -> Head (next)
+                // So "Right" is towards Head (next).
+                if (current.link.next) |next| {
+                    if (next != &views.link) {
+                        const toplevel: *Toplevel = @fieldParentPtr("link", next);
+                        server.focusView(toplevel, toplevel.xdg_toplevel.base.surface);
+                    }
+                }
             },
             else => return false,
         }
