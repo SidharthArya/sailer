@@ -150,6 +150,8 @@ pub const Server = struct {
         _ = try wlr.Compositor.create(server.wl_server, 6, server.renderer);
         _ = try wlr.Subcompositor.create(server.wl_server);
         _ = try wlr.DataDeviceManager.create(server.wl_server);
+        _ = try wlr.ScreencopyManagerV1.create(server.wl_server);
+        _ = try wlr.XdgOutputManagerV1.create(server.wl_server, server.output_layout);
 
         // Initialize 10 workspaces
         for (&server.workspaces, 0..) |*ws, i| {
@@ -168,6 +170,7 @@ pub const Server = struct {
         server.socket_name = try wl_server.addSocketAuto(&server.socket_name_buf);
         std.log.info("Running compositor on WAYLAND_DISPLAY={s}", .{server.socket_name});
     }
+
 
     pub fn warpCursorToOutput(server: *Server, wlr_output: *wlr.Output) void {
         var box: wlr.Box = undefined;
@@ -779,6 +782,12 @@ pub const Server = struct {
                 server.updateLayout();
             },
             .focus_output => server.focusNextOutput(),
+            .screenshot => {
+                const timestamp = std.time.timestamp();
+                var cmd_buf: [512]u8 = undefined;
+                const cmd = std.fmt.bufPrint(&cmd_buf, "mkdir -p ~/Pictures/screenshots && grim ~/Pictures/screenshots/sa_screenshot_{d}.png", .{timestamp}) catch "grim";
+                server.spawn(cmd);
+            },
         }
     }
 

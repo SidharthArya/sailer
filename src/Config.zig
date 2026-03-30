@@ -17,6 +17,7 @@ pub const Action = enum {
     set_display_mode,
     cycle_display_mode,
     focus_output,
+    screenshot,
 };
 
 pub const DisplayMode = enum {
