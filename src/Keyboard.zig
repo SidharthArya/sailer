@@ -74,22 +74,64 @@ fn handleKey(listener: *wl.Listener(*wlr.Keyboard.event.Key), event: *wlr.Keyboa
     const keycode = event.keycode + 8;
 
     var handled = false;
+    const wlr_keyboard_ptr = wlr_keyboard; // help with capture
     if (event.state == .pressed) {
         if (wlr_keyboard.xkb_state) |state| {
             const mods = wlr_keyboard.getModifiers();
-            for (state.keyGetSyms(keycode)) |sym| {
-                if (server.handleKeybind(sym, mods)) {
-                    handled = true;
+            const syms = state.keyGetSyms(keycode);
+
+            var is_mod = false;
+            for (syms) |sym| {
+                if (isModifier(sym)) {
+                    is_mod = true;
                     break;
                 }
             }
+
+            if (is_mod) {
+                server.last_mod_tap_ready = true;
+                if (syms.len > 0) server.last_mod_sym = syms[0];
+            } else {
+                server.last_mod_tap_ready = false;
+                server.last_mod_sym = null;
+                if (server.handleKeybind(syms, mods)) {
+                    handled = true;
+                }
+            }
+        }
+    } else { // .released
+        if (wlr_keyboard.xkb_state) |state| {
+            const mods = wlr_keyboard.getModifiers();
+            const syms = state.keyGetSyms(keycode);
+            if (server.last_mod_tap_ready) {
+                if (server.last_mod_sym) |last_sym| {
+                    for (syms) |sym| {
+                        if (@intFromEnum(sym) == @intFromEnum(last_sym)) {
+                            // This is a Modifier Tap!
+                            std.log.debug("Modifier Tap detected: sym={}", .{sym});
+                            _ = server.handleKeybind(syms, mods);
+                            break;
+                        }
+                    }
+                }
+            }
+            server.last_mod_tap_ready = false;
+            server.last_mod_sym = null;
         }
     }
 
     if (!handled) {
-        wlr.Seat.setKeyboard(server.seat, wlr_keyboard);
+        wlr.Seat.setKeyboard(server.seat, wlr_keyboard_ptr);
         server.seat.keyboardNotifyKey(event.time_msec, event.keycode, event.state);
     }
+}
+
+fn isModifier(sym: xkb.Keysym) bool {
+    const s = @intFromEnum(sym);
+    return s == xkb.Keysym.Control_L or s == xkb.Keysym.Control_R or
+        s == xkb.Keysym.Shift_L or s == xkb.Keysym.Shift_R or
+        s == xkb.Keysym.Alt_L or s == xkb.Keysym.Alt_R or
+        s == xkb.Keysym.Super_L or s == xkb.Keysym.Super_R;
 }
 
 fn handleDestroyC(listener: *wl.Listener(*wlr.InputDevice), data: ?*anyopaque) callconv(.c) void {

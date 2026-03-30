@@ -9,6 +9,20 @@ const Toplevel = View.Toplevel;
 const Popup = View.Popup;
 const KeyboardDevice = @import("Keyboard.zig").KeyboardDevice;
 const Workspace = @import("Workspace.zig").Workspace;
+const Config = @import("Config.zig").Config;
+const Keybinding = @import("Config.zig").Keybinding;
+
+pub const KeyMatch = struct {
+    sym: xkb.Keysym,
+    mods: wlr.Keyboard.ModifierMask,
+};
+pub const MatchResult = enum { none, partial, full };
+
+fn handleSequenceTimeout(server: *Server) c_int {
+    std.log.debug("Sequence timeout fired, clearing.", .{});
+    server.current_sequence.clearRetainingCapacity();
+    return 0;
+}
 
 pub const Server = struct {
     wl_server: *wl.Server,
@@ -42,7 +56,15 @@ pub const Server = struct {
     cursor_axis: wl.Listener(*wlr.Pointer.event.Axis) = .init(Server.cursorAxis),
     cursor_frame: wl.Listener(*wlr.Cursor) = .init(Server.cursorFrame),
 
-    config: std.json.Parsed(@import("Config.zig").Config) = undefined,
+    config: std.json.Parsed(Config) = undefined,
+
+    current_sequence: std.ArrayListUnmanaged(KeyMatch) = .{},
+    sequence_timer: *wl.EventSource = undefined,
+
+    // For modifier tap detection
+    last_mod_tap_ready: bool = false,
+    last_mod_sym: ?xkb.Keysym = null,
+    last_mod_timestamp: u32 = 0,
 
     cursor_mode: enum { passthrough, move, resize } = .passthrough,
     grabbed_view: ?*Toplevel = null,
@@ -71,7 +93,10 @@ pub const Server = struct {
             .seat = try wlr.Seat.create(wl_server, "default"),
             .cursor = try wlr.Cursor.create(),
             .cursor_mgr = try wlr.XcursorManager.create(null, 24),
+
+            .sequence_timer = try loop.addTimer(*Server, handleSequenceTimeout, server),
         };
+        server.sequence_timer.timerUpdate(0) catch {}; // Disarmed initially
 
         try server.renderer.initServer(wl_server);
 
@@ -107,7 +132,6 @@ pub const Server = struct {
         server.cursor.events.axis.add(&server.cursor_axis);
         server.cursor.events.frame.add(&server.cursor_frame);
 
-        const Config = @import("Config.zig").Config;
         server.config = Config.load(std.heap.c_allocator) catch |err| blk: {
             std.log.err("failed to load config: {}, using default", .{err});
             break :blk Config.default(std.heap.c_allocator) catch unreachable;
@@ -450,80 +474,145 @@ pub const Server = struct {
         }
     }
 
-    pub fn handleKeybind(server: *Server, key: xkb.Keysym, mods: wlr.Keyboard.ModifierMask) bool {
-        // Log all keypresses to help debugging config issues
-        std.log.info("KeyPress: sym={d}, mods(c={}, s={}, a={}, l={})", .{ @intFromEnum(key), mods.ctrl, mods.shift, mods.alt, mods.logo });
+    fn executeAction(server: *Server, kb: Keybinding) void {
+        const action = kb.action orelse return;
+        switch (action) {
+            .spawn => if (kb.command) |cmd| {
+                var child = std.process.Child.init(&[_][]const u8{ "sh", "-c", cmd }, std.heap.c_allocator);
+                var env = std.process.getEnvMap(std.heap.c_allocator) catch return;
+                defer env.deinit();
+                env.put("WAYLAND_DISPLAY", server.socket_name) catch {};
+                child.env_map = &env;
+                _ = child.spawn() catch {};
+            },
+            .focus_left => server.focused_workspace.focusRelative(-1),
+            .focus_right => server.focused_workspace.focusRelative(1),
+            .resize_shrink => if (server.seat.keyboard_state.focused_surface) |surface| {
+                if (wlr.XdgSurface.tryFromWlrSurface(surface)) |xdg_surface| {
+                    if (View.fromXdgSurface(xdg_surface)) |t| {
+                        t.width_percent = @max(10, t.width_percent - 5);
+                        t.workspace.arrange();
+                    }
+                }
+            },
+            .resize_expand => if (server.seat.keyboard_state.focused_surface) |surface| {
+                if (wlr.XdgSurface.tryFromWlrSurface(surface)) |xdg_surface| {
+                    if (View.fromXdgSurface(xdg_surface)) |t| {
+                        t.width_percent = @min(100, t.width_percent + 5);
+                        t.workspace.arrange();
+                    }
+                }
+            },
+            .reorder_left => if (server.seat.keyboard_state.focused_surface) |surface| {
+                if (wlr.XdgSurface.tryFromWlrSurface(surface)) |xdg_surface| {
+                    if (View.fromXdgSurface(xdg_surface)) |t| {
+                        t.workspace.reorderView(t, -1);
+                    }
+                }
+            },
+            .reorder_right => if (server.seat.keyboard_state.focused_surface) |surface| {
+                if (wlr.XdgSurface.tryFromWlrSurface(surface)) |xdg_surface| {
+                    if (View.fromXdgSurface(xdg_surface)) |t| {
+                        t.workspace.reorderView(t, 1);
+                    }
+                }
+            },
+            .switch_workspace => if (kb.workspace_index) |idx| {
+                server.switchToWorkspace(idx - 1);
+            },
+            .terminate => server.wl_server.terminate(),
+        }
+    }
 
-        for (server.config.value.keybindings) |kb| {
-            const kb_sym = kb.getKeysym();
-            const kb_mods = kb.getModifiers();
+    fn matchKey(kb: Keybinding, sym: xkb.Keysym, mods: wlr.Keyboard.ModifierMask, is_sequence_step: bool) bool {
+        const kb_sym = kb.getKeysym();
+        const kb_mods = kb.getModifiers();
+        var match = @intFromEnum(sym) == @intFromEnum(kb_sym);
 
-            // Log what we are checking against
-            std.log.info("Checking against: sym={d}, mods(c={}, s={}, a={}, l={})", .{ @intFromEnum(kb_sym), kb_mods.ctrl, kb_mods.shift, kb_mods.alt, kb_mods.logo });
-
-            if (@intFromEnum(key) == @intFromEnum(kb_sym) and
-                mods.ctrl == kb_mods.ctrl and
+        if (match and !is_sequence_step) {
+            match = mods.ctrl == kb_mods.ctrl and
                 mods.shift == kb_mods.shift and
                 mods.alt == kb_mods.alt and
-                mods.logo == kb_mods.logo)
-            {
-                std.log.info("Keybinding Match Found: action={any}", .{kb.action});
-                switch (kb.action) {
-                    .spawn => if (kb.command) |cmd| {
-                        std.log.info("Spawning: {s}", .{cmd});
-                        var child = std.process.Child.init(&[_][]const u8{ "sh", "-c", cmd }, std.heap.c_allocator);
+                mods.logo == kb_mods.logo;
+        }
 
-                        var env = std.process.getEnvMap(std.heap.c_allocator) catch {
-                            return true;
-                        };
-                        defer env.deinit();
-                        env.put("WAYLAND_DISPLAY", server.socket_name) catch {};
-                        child.env_map = &env;
+        if (match) {
+            std.log.debug("Key match found: sym={}, mods={} (is_seq={})", .{ sym, mods, is_sequence_step });
+        }
+        return match;
+    }
 
-                        _ = child.spawn() catch |err| {
-                            std.log.err("failed to spawn command '{s}': {any}", .{ cmd, err });
-                        };
-                    },
-                    .focus_left => server.focused_workspace.focusRelative(-1),
-                    .focus_right => server.focused_workspace.focusRelative(1),
-                    .resize_shrink => if (server.seat.keyboard_state.focused_surface) |surface| {
-                        if (wlr.XdgSurface.tryFromWlrSurface(surface)) |xdg_surface| {
-                            if (View.fromXdgSurface(xdg_surface)) |t| {
-                                t.width_percent = @max(10, t.width_percent - 5);
-                                t.workspace.arrange();
-                            }
+    pub fn handleKeybind(server: *Server, syms: []const xkb.Keysym, mods: wlr.Keyboard.ModifierMask) bool {
+        // We try to match each sym. If any sym results in a partial or full match, we keep that state.
+        // We only append to the sequence ONCE per event.
+        // Usually, we just pick the first sym for now to keep it simple but correct.
+        if (syms.len == 0) return false;
+        const key = syms[0];
+
+        server.current_sequence.append(std.heap.c_allocator, .{ .sym = key, .mods = mods }) catch return false;
+        server.sequence_timer.timerUpdate(1000) catch {};
+
+        const current = server.current_sequence.items;
+        std.log.debug("Sequence current length: {}", .{current.len});
+
+        var any_match = false;
+        var full_match = false;
+
+        for (server.config.value.keybindings) |kb| {
+            if (kb.sequence) |seq| {
+                if (current.len <= seq.len) {
+                    var match = true;
+                    for (current, 0..) |step, i| {
+                        if (!matchKey(seq[i], step.sym, step.mods, true)) {
+                            match = false;
+                            break;
                         }
-                    },
-                    .resize_expand => if (server.seat.keyboard_state.focused_surface) |surface| {
-                        if (wlr.XdgSurface.tryFromWlrSurface(surface)) |xdg_surface| {
-                            if (View.fromXdgSurface(xdg_surface)) |t| {
-                                t.width_percent = @min(100, t.width_percent + 5);
-                                t.workspace.arrange();
-                            }
+                    }
+                    if (match) {
+                        any_match = true;
+                        if (current.len == seq.len) {
+                            std.log.debug("Full sequence match found!", .{});
+                            server.executeAction(kb);
+                            full_match = true;
+                            break;
+                        } else {
+                            std.log.debug("Partial sequence match (prefix).", .{});
                         }
-                    },
-                    .reorder_left => if (server.seat.keyboard_state.focused_surface) |surface| {
-                        if (wlr.XdgSurface.tryFromWlrSurface(surface)) |xdg_surface| {
-                            if (View.fromXdgSurface(xdg_surface)) |t| {
-                                t.workspace.reorderView(t, -1);
-                            }
-                        }
-                    },
-                    .reorder_right => if (server.seat.keyboard_state.focused_surface) |surface| {
-                        if (wlr.XdgSurface.tryFromWlrSurface(surface)) |xdg_surface| {
-                            if (View.fromXdgSurface(xdg_surface)) |t| {
-                                t.workspace.reorderView(t, 1);
-                            }
-                        }
-                    },
-                    .switch_workspace => if (kb.workspace_index) |idx| {
-                        server.switchToWorkspace(idx - 1);
-                    },
-                    .terminate => server.wl_server.terminate(),
+                    }
                 }
-                return true;
+            } else {
+                if (current.len == 1 and matchKey(kb, key, mods, false)) {
+                    std.log.debug("Single keybind match found!", .{});
+                    server.executeAction(kb);
+                    any_match = true;
+                    full_match = true;
+                    break;
+                }
             }
         }
+
+        if (full_match) {
+            server.current_sequence.clearRetainingCapacity();
+            server.sequence_timer.timerUpdate(0) catch {};
+            return true;
+        }
+
+        if (any_match) {
+            return true;
+        }
+
+        // If no match was found, but it could be a prefix of some other sequence, keep it.
+        // Otherwise, if this was the first key and no match/prefix, clear and let it through.
+        if (current.len == 1) {
+            std.log.debug("No match for first key in sequence, clearing.", .{});
+            server.current_sequence.clearRetainingCapacity();
+            server.sequence_timer.timerUpdate(0) catch {};
+            return false;
+        }
+
+        std.log.debug("Sequence mismatch mid-flight, clearing.", .{});
+        server.current_sequence.clearRetainingCapacity();
+        server.sequence_timer.timerUpdate(0) catch {};
         return false;
     }
 };

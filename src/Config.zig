@@ -15,24 +15,24 @@ pub const Action = enum {
 };
 
 pub const Keybinding = struct {
-    key: []const u8,
-    modifiers: []const []const u8,
-    action: Action,
+    key: []const u8 = "",
+    modifiers: []const []const u8 = &.{},
+    action: ?Action = null,
     command: ?[]const u8 = null,
     workspace_index: ?u32 = null,
+    sequence: ?[]Keybinding = null,
 
     pub fn getKeysym(self: Keybinding) xkb.Keysym {
+        if (self.key.len == 0) return .NoSymbol;
         const namez = std.heap.c_allocator.dupeZ(u8, self.key) catch return .NoSymbol;
         defer std.heap.c_allocator.free(namez);
         const sym = xkb.Keysym.fromName(namez, .no_flags);
-        std.log.info("getKeysym: name='{s}', sym={d}", .{ self.key, @intFromEnum(sym) });
         return sym;
     }
 
     pub fn getModifiers(self: Keybinding) wlr.Keyboard.ModifierMask {
         var mask = wlr.Keyboard.ModifierMask{};
         for (self.modifiers) |m| {
-            std.log.info("Parsing modifier: '{s}'", .{m});
             if (std.ascii.eqlIgnoreCase(m, "ctrl")) mask.ctrl = true;
             if (std.ascii.eqlIgnoreCase(m, "shift")) mask.shift = true;
             if (std.ascii.eqlIgnoreCase(m, "alt") or std.ascii.eqlIgnoreCase(m, "mod1")) mask.alt = true;
