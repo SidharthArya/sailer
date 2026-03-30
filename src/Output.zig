@@ -8,6 +8,7 @@ pub const Output = struct {
     server: *Server,
     wlr_output: *wlr.Output,
 
+    link: wl.list.Link = undefined,
     frame: wl.Listener(*wlr.Output) = .init(Output.handleFrame),
     request_state: wl.Listener(*wlr.Output.event.RequestState) = .init(Output.handleRequestState),
     destroy: wl.Listener(*wlr.Output) = .init(Output.handleDestroy),
@@ -22,6 +23,8 @@ pub const Output = struct {
         wlr_output.events.frame.add(&output.frame);
         wlr_output.events.request_state.add(&output.request_state);
         wlr_output.events.destroy.add(&output.destroy);
+
+        server.outputs.prepend(output);
 
         const layout_output = try server.output_layout.addAuto(wlr_output);
 
@@ -55,7 +58,14 @@ pub const Output = struct {
         output.frame.link.remove();
         output.request_state.link.remove();
         output.destroy.link.remove();
+        output.link.remove();
 
+        const server = output.server;
         std.heap.c_allocator.destroy(output);
+
+        if (server.outputs.link.next == &server.outputs.link) {
+            std.log.info("Last output destroyed, terminating server", .{});
+            server.wl_server.terminate();
+        }
     }
 };

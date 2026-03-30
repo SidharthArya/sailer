@@ -13,6 +13,7 @@ pub const Toplevel = struct {
     x: i32 = 0,
     y: i32 = 0,
     width_percent: i32 = 70,
+    mapped: bool = false,
 
     commit: wl.Listener(*wlr.Surface) = .init(Toplevel.handleCommit),
     map: wl.Listener(void) = .init(Toplevel.handleMap),
@@ -30,7 +31,7 @@ pub const Toplevel = struct {
 
     fn handleMap(listener: *wl.Listener(void)) void {
         const toplevel: *Toplevel = @fieldParentPtr("map", listener);
-        toplevel.workspace.views.prepend(toplevel);
+        toplevel.mapped = true;
         toplevel.server.focusView(toplevel, toplevel.xdg_toplevel.base.surface);
         toplevel.workspace.arrange();
     }
@@ -40,6 +41,17 @@ pub const Toplevel = struct {
         if (toplevel.server.grabbed_view == toplevel) {
             toplevel.server.grabbed_view = null;
         }
+
+        const ws = toplevel.workspace;
+        toplevel.mapped = false;
+        if (ws.layout_mode == .tiling) {
+            if (ws.tiling_root) |root| {
+                if (root.findNodeForView(toplevel)) |node| {
+                    node.remove(std.heap.c_allocator, &ws.tiling_root);
+                }
+            }
+        }
+
         toplevel.link.remove();
         toplevel.workspace.arrange();
     }

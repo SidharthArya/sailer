@@ -11,7 +11,16 @@ pub const Action = enum {
     reorder_left,
     reorder_right,
     switch_workspace,
+    toggle_layout,
+    smart_view,
     terminate,
+    set_display_mode,
+};
+
+pub const DisplayMode = enum {
+    discrete,
+    spanned,
+    mirror,
 };
 
 pub const Keybinding = struct {
@@ -20,6 +29,7 @@ pub const Keybinding = struct {
     action: ?Action = null,
     command: ?[]const u8 = null,
     workspace_index: ?u32 = null,
+    display_mode: ?DisplayMode = null,
     sequence: ?[]Keybinding = null,
 
     pub fn getKeysym(self: Keybinding) xkb.Keysym {

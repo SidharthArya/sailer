@@ -29,6 +29,7 @@ pub const Server = struct {
     backend: *wlr.Backend,
     renderer: *wlr.Renderer,
     allocator: *wlr.Allocator,
+    session: ?*wlr.Session = null,
     scene: *wlr.Scene,
 
     output_layout: *wlr.OutputLayout,
@@ -47,6 +48,8 @@ pub const Server = struct {
     request_set_cursor: wl.Listener(*wlr.Seat.event.RequestSetCursor) = .init(Server.requestSetCursor),
     request_set_selection: wl.Listener(*wlr.Seat.event.RequestSetSelection) = .init(Server.requestSetSelection),
     keyboards: wl.list.Head(KeyboardDevice, .link) = undefined,
+    outputs: wl.list.Head(@import("Output.zig").Output, .link) = undefined,
+    toplevels: wl.list.Head(Toplevel, .link) = undefined,
 
     cursor: *wlr.Cursor,
     cursor_mgr: *wlr.XcursorManager,
@@ -77,8 +80,12 @@ pub const Server = struct {
     pub fn init(server: *Server) !void {
         const wl_server = try wl.Server.create();
         const loop = wl_server.getEventLoop();
-        const backend = try wlr.Backend.autocreate(loop, null);
+        const backend = try wlr.Backend.autocreate(loop, @ptrCast(&server.session));
+        server.backend = backend;
+
         const renderer = try wlr.Renderer.autocreate(backend);
+        server.renderer = renderer;
+
         const output_layout = try wlr.OutputLayout.create(wl_server);
         const scene = try wlr.Scene.create();
         server.* = .{
@@ -89,11 +96,10 @@ pub const Server = struct {
             .scene = scene,
             .output_layout = output_layout,
             .scene_output_layout = try scene.attachOutputLayout(output_layout),
-            .xdg_shell = try wlr.XdgShell.create(wl_server, 2),
-            .seat = try wlr.Seat.create(wl_server, "default"),
+            .seat = try wlr.Seat.create(wl_server, "seat0"),
+            .xdg_shell = try wlr.XdgShell.create(wl_server, 3),
             .cursor = try wlr.Cursor.create(),
             .cursor_mgr = try wlr.XcursorManager.create(null, 24),
-
             .sequence_timer = try loop.addTimer(*Server, handleSequenceTimeout, server),
         };
         server.sequence_timer.timerUpdate(0) catch {}; // Disarmed initially
@@ -123,6 +129,8 @@ pub const Server = struct {
         server.seat.events.request_set_cursor.add(&server.request_set_cursor);
         server.seat.events.request_set_selection.add(&server.request_set_selection);
         server.keyboards.init();
+        server.outputs.init();
+        server.toplevels.init();
 
         server.cursor.attachOutputLayout(server.output_layout);
         try server.cursor_mgr.load(1);
@@ -173,10 +181,10 @@ pub const Server = struct {
         if (!wlr_output.commitState(&state)) return;
 
         const output_ptr = Output.create(server, wlr_output) catch {
-            std.log.err("failed to allocate new output", .{});
             wlr_output.destroy();
             return;
         };
+        server.outputs.prepend(output_ptr);
 
         // Assign this output to the first hidden workspace
         for (&server.workspaces) |*ws| {
@@ -200,11 +208,12 @@ pub const Server = struct {
             return;
         };
 
+        const ws = server.focused_workspace;
         toplevel.* = .{
             .server = server,
-            .workspace = server.focused_workspace,
+            .workspace = ws,
             .xdg_toplevel = xdg_toplevel,
-            .scene_tree = server.focused_workspace.scene_tree.createSceneXdgSurface(xdg_surface) catch {
+            .scene_tree = ws.scene_tree.createSceneXdgSurface(xdg_surface) catch {
                 std.heap.c_allocator.destroy(toplevel);
                 std.log.err("failed to allocate new toplevel scene tree", .{});
                 return;
@@ -212,6 +221,20 @@ pub const Server = struct {
         };
         toplevel.scene_tree.node.data = toplevel;
         xdg_surface.data = toplevel.scene_tree;
+
+        // Add to workspace list immediately so link is valid for remove() later
+        ws.views.prepend(toplevel);
+
+        if (ws.layout_mode == .tiling) {
+            const TilingNode = @import("Tiling.zig").TilingNode;
+            if (ws.tiling_root) |root| {
+                root.split(std.heap.c_allocator, toplevel) catch |err| {
+                    std.log.err("failed to split tiling node: {}", .{err});
+                };
+            } else {
+                ws.tiling_root = TilingNode.createLeaf(std.heap.c_allocator, toplevel) catch null;
+            }
+        }
 
         xdg_surface.surface.events.commit.add(&toplevel.commit);
         xdg_surface.surface.events.map.add(&toplevel.map);
@@ -477,6 +500,32 @@ pub const Server = struct {
     fn executeAction(server: *Server, kb: Keybinding) void {
         const action = kb.action orelse return;
         switch (action) {
+            .toggle_layout => {
+                const ws = server.focused_workspace;
+                ws.layout_mode = if (ws.layout_mode == .ribbon) .tiling else .ribbon;
+                // If switching to tiling, we might need to initialize the tree from existing views
+                if (ws.layout_mode == .tiling and ws.tiling_root == null) {
+                    const TilingNode = @import("Tiling.zig").TilingNode;
+                    var it = ws.views.link.prev;
+                    while (it != &ws.views.link) : (it = it.?.prev) {
+                        const view: *Toplevel = @fieldParentPtr("link", it.?);
+                        if (ws.tiling_root) |root| {
+                            root.split(std.heap.c_allocator, view) catch {};
+                        } else {
+                            ws.tiling_root = TilingNode.createLeaf(std.heap.c_allocator, view) catch null;
+                        }
+                    }
+                }
+                ws.arrange();
+            },
+            .smart_view => {
+                const ws = server.focused_workspace;
+                ws.layout_mode = if (ws.layout_mode == .smart_view) .ribbon else .smart_view;
+                ws.arrange();
+            },
+            .terminate => {
+                server.wl_server.terminate();
+            },
             .spawn => if (kb.command) |cmd| {
                 var child = std.process.Child.init(&[_][]const u8{ "sh", "-c", cmd }, std.heap.c_allocator);
                 var env = std.process.getEnvMap(std.heap.c_allocator) catch return;
@@ -520,26 +569,43 @@ pub const Server = struct {
             .switch_workspace => if (kb.workspace_index) |idx| {
                 server.switchToWorkspace(idx - 1);
             },
-            .terminate => server.wl_server.terminate(),
         }
     }
 
     fn matchKey(kb: Keybinding, sym: xkb.Keysym, mods: wlr.Keyboard.ModifierMask, is_sequence_step: bool) bool {
         const kb_sym = kb.getKeysym();
         const kb_mods = kb.getModifiers();
-        var match = @intFromEnum(sym) == @intFromEnum(kb_sym);
 
-        if (match and !is_sequence_step) {
-            match = mods.ctrl == kb_mods.ctrl and
+        const s = @intFromEnum(sym);
+        const k = @intFromEnum(kb_sym);
+
+        var sym_match = (s == k);
+        if (!sym_match) {
+            // Case-insensitive match for a-z/A-Z
+            if (s >= 'A' and s <= 'Z' and k >= 'a' and k <= 'z') {
+                if (s - 'A' == k - 'a') sym_match = true;
+            } else if (s >= 'a' and s <= 'z' and k >= 'A' and k <= 'Z') {
+                if (s - 'a' == k - 'A') sym_match = true;
+            }
+        }
+
+        if (sym_match) {
+            const mod_match = mods.ctrl == kb_mods.ctrl and
                 mods.shift == kb_mods.shift and
                 mods.alt == kb_mods.alt and
                 mods.logo == kb_mods.logo;
+
+            if (mod_match) {
+                if (s < 128) {
+                    std.log.debug("Key match found: sym={} ({c}), mods={} (is_seq={})", .{ s, @as(u8, @intCast(s)), mods, is_sequence_step });
+                } else {
+                    std.log.debug("Key match found: sym={}, mods={} (is_seq={})", .{ s, mods, is_sequence_step });
+                }
+                return true;
+            }
         }
 
-        if (match) {
-            std.log.debug("Key match found: sym={}, mods={} (is_seq={})", .{ sym, mods, is_sequence_step });
-        }
-        return match;
+        return false;
     }
 
     pub fn handleKeybind(server: *Server, syms: []const xkb.Keysym, mods: wlr.Keyboard.ModifierMask) bool {

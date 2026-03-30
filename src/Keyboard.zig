@@ -86,6 +86,13 @@ fn handleKey(listener: *wl.Listener(*wlr.Keyboard.event.Key), event: *wlr.Keyboa
                     is_mod = true;
                     break;
                 }
+                const s = @intFromEnum(sym);
+                if (s >= 0x1008FE01 and s <= 0x1008FE0C) { // XF86Switch_VT_1 through XF86Switch_VT_12
+                    if (server.session) |session| {
+                        session.changeVt(@intCast(s - 0x1008FE01 + 1)) catch {};
+                        return;
+                    }
+                }
             }
 
             if (is_mod) {
@@ -107,9 +114,13 @@ fn handleKey(listener: *wl.Listener(*wlr.Keyboard.event.Key), event: *wlr.Keyboa
                 if (server.last_mod_sym) |last_sym| {
                     for (syms) |sym| {
                         if (@intFromEnum(sym) == @intFromEnum(last_sym)) {
-                            // This is a Modifier Tap!
-                            std.log.debug("Modifier Tap detected: sym={}", .{sym});
-                            _ = server.handleKeybind(syms, mods);
+                            // Only trigger tap if no other sequence is in progress
+                            if (server.current_sequence.items.len == 0) {
+                                std.log.debug("Modifier Tap detected: sym={}", .{sym});
+                                _ = server.handleKeybind(syms, mods);
+                            } else {
+                                std.log.debug("Modifier released but sequence in progress, skipping tap.", .{});
+                            }
                             break;
                         }
                     }
