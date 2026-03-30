@@ -35,8 +35,8 @@ pub const Toplevel = struct {
         const toplevel: *Toplevel = @fieldParentPtr("map", listener);
         std.log.debug("View map: {s}", .{@as([*:0]const u8, @ptrCast(toplevel.xdg_toplevel.title orelse "unnamed"))});
         toplevel.mapped = true;
-        toplevel.server.focusView(toplevel, toplevel.xdg_toplevel.base.surface);
         toplevel.workspace.arrange();
+        toplevel.server.focusView(toplevel, toplevel.xdg_toplevel.base.surface);
     }
 
     fn handleUnmap(listener: *wl.Listener(void)) void {

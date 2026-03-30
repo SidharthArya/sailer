@@ -37,6 +37,8 @@ pub const Server = struct {
     new_output: wl.Listener(*wlr.Output) = .init(Server.newOutput),
 
     xdg_shell: *wlr.XdgShell,
+    xdg_activation: *wlr.XdgActivationV1,
+    xdg_decoration: *wlr.XdgDecorationManagerV1,
     new_xdg_toplevel: wl.Listener(*wlr.XdgToplevel) = .init(Server.newXdgToplevel),
     new_xdg_popup: wl.Listener(*wlr.XdgPopup) = .init(Server.newXdgPopup),
 
@@ -77,6 +79,7 @@ pub const Server = struct {
     grab_box: wlr.Box = undefined,
     resize_edges: wlr.Edges = .{},
     socket_name: []const u8 = "",
+    socket_name_buf: [11]u8 = undefined,
 
     pub fn init(server: *Server) !void {
         // Initialize listeners and fields with defaults explicitly to avoid garbage
@@ -121,6 +124,8 @@ pub const Server = struct {
         server.scene_output_layout = try server.scene.attachOutputLayout(server.output_layout);
         server.seat = try wlr.Seat.create(wl_server, "seat0");
         server.xdg_shell = try wlr.XdgShell.create(wl_server, 3);
+        server.xdg_activation = try wlr.XdgActivationV1.create(wl_server);
+        server.xdg_decoration = try wlr.XdgDecorationManagerV1.create(wl_server);
         server.cursor = try wlr.Cursor.create();
         server.cursor.attachOutputLayout(server.output_layout);
         server.cursor_mgr = try wlr.XcursorManager.create(null, 24);
@@ -159,6 +164,9 @@ pub const Server = struct {
             std.log.err("failed to load config: {}, using default", .{err});
             break :blk Config.default(std.heap.c_allocator) catch unreachable;
         };
+
+        server.socket_name = try wl_server.addSocketAuto(&server.socket_name_buf);
+        std.log.info("Running compositor on WAYLAND_DISPLAY={s}", .{server.socket_name});
     }
 
     pub fn warpCursorToOutput(server: *Server, wlr_output: *wlr.Output) void {
@@ -202,20 +210,33 @@ pub const Server = struct {
     }
 
     pub fn spawn(server: *Server, cmd: []const u8) void {
-        std.log.info("Attempting to spawn: {s} (WAYLAND_DISPLAY={s})", .{ cmd, server.socket_name });
-        var child = std.process.Child.init(&[_][]const u8{ "sh", "-c", cmd }, std.heap.c_allocator);
-        var env = std.process.getEnvMap(std.heap.c_allocator) catch |err| {
-            std.log.err("failed to get env map for spawn: {}", .{err});
+        std.log.info("Compositor spawning command: {s}", .{cmd});
+
+        const xdg = std.process.getEnvVarOwned(std.heap.c_allocator, "XDG_RUNTIME_DIR") catch null;
+        if (xdg) |dir| {
+            std.log.debug("Child XDG_RUNTIME_DIR: {s}", .{dir});
+            std.heap.c_allocator.free(dir);
+        } else {
+            std.log.warn("Child XDG_RUNTIME_DIR is NOT SET!", .{});
+        }
+
+        var child = std.process.Child.init(&[_][]const u8{ "/bin/sh", "-c", cmd }, std.heap.c_allocator);
+        var env_map = std.process.getEnvMap(std.heap.c_allocator) catch |err| {
+            std.log.err("Failed to get environment map for spawn: {}", .{err});
             return;
         };
-        defer env.deinit();
-        env.put("WAYLAND_DISPLAY", server.socket_name) catch {};
-        child.env_map = &env;
+        defer env_map.deinit();
+
+        env_map.put("WAYLAND_DISPLAY", server.socket_name) catch |err| {
+            std.log.err("Failed to set WAYLAND_DISPLAY in child env: {}", .{err});
+        };
+
+        child.env_map = &env_map;
         _ = child.spawn() catch |err| {
-            std.log.err("failed to spawn {s}: {}", .{ cmd, err });
+            std.log.err("Failed to spawn command '{s}': {}", .{ cmd, err });
             return;
         };
-        std.log.info("Successfully spawned: {s}", .{cmd});
+        std.log.info("Successfully spawned command '{s}' with WAYLAND_DISPLAY={s}", .{ cmd, server.socket_name });
     }
 
     pub fn updateLayout(server: *Server) void {
@@ -315,13 +336,7 @@ pub const Server = struct {
         }
         if (!wlr_output.commitState(&state)) return;
 
-        // CRITICAL: Create the wl_output Wayland global so that wlr_output.global
-        // is non-null. wlroots calls wlr_output_destroy_global inside wlr_output_destroy;
-        // if the global was never created, it crashes in libwayland-server.
-        wlr_output.createGlobal(server.wl_server);
-
         const output_ptr = Output.create(server, wlr_output) catch {
-            wlr_output.destroyGlobal();
             wlr_output.destroy();
             return;
         };
@@ -454,6 +469,7 @@ pub const Server = struct {
 
         // Sync focused workspace to the view's workspace
         server.focused_workspace = toplevel.workspace;
+        toplevel.workspace.ensureViewVisible(toplevel);
 
         // Keep physical order stable for Ribbon navigation.
         // We only raise the scene node for visual priority.

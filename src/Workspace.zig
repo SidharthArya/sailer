@@ -36,13 +36,6 @@ pub const Workspace = struct {
             .tiling_root = null,
         };
         workspace.views.init();
-        // Add a diagnostic background (vibrant red)
-        const bg = server.scene.tree.createSceneRect(8000, 8000, &[_]f32{ 1.0, 0.0, 0.0, 1.0 }) catch |err| {
-            std.log.err("Failed to create bg rect: {s}", .{@errorName(err)});
-            return workspace;
-        };
-        bg.node.setEnabled(true);
-        bg.node.reparent(workspace.scene_tree);
         return workspace;
     }
 
@@ -75,7 +68,11 @@ pub const Workspace = struct {
             const width: i32 = @divTrunc(box.width * view.width_percent, 100);
             const height: i32 = box.height;
 
-            _ = wlr.XdgToplevel.setSize(view.xdg_toplevel, width, height);
+            // Smart Resize: Only send configure if target dimensions actually changed.
+            // This prevents "Primary buffer size mismatch" spam and helps stability.
+            if (view.xdg_toplevel.current.width != width or view.xdg_toplevel.current.height != height) {
+                _ = wlr.XdgToplevel.setSize(view.xdg_toplevel, width, height);
+            }
             view.scene_tree.node.setPosition(current_x, 0);
             std.log.debug("Ribbon arrange: {s} -> {d},0 (size {d}x{d})", .{ @as([*:0]const u8, @ptrCast(view.xdg_toplevel.title orelse "unnamed")), current_x, width, height });
 
@@ -86,9 +83,80 @@ pub const Workspace = struct {
         }
 
         // Apply scroll offset and output position
-        // FORCE ORIGIN FOR VISIBILITY TEST
-        self.scene_tree.node.setPosition(0, 0);
-        std.log.debug("Workspace '{s}' FORCE positioned at 0,0", .{self.name});
+        if (self.server.display_mode == .discrete) {
+            if (self.visible_on) |output| {
+                if (self.server.output_layout.get(output.wlr_output)) |l_output| {
+                    self.scene_tree.node.setPosition(l_output.x + self.scroll_offset_x, l_output.y);
+                    std.log.debug("Workspace '{s}' positioned at {d}+{d},{d}", .{ self.name, l_output.x, self.scroll_offset_x, l_output.y });
+                }
+            }
+        } else {
+            self.scene_tree.node.setPosition(self.scroll_offset_x, 0);
+        }
+    }
+
+    fn clampScroll(self: *Workspace, box: wlr.Box) void {
+        // Never allow positive scroll (pushed to right)
+        if (self.scroll_offset_x > 0) {
+            self.scroll_offset_x = 0;
+        }
+
+        // Calculate total width of all windows to prevent over-scrolling into empty space
+        var total_width: i32 = 0;
+        var it = self.views.link.prev;
+        while (it != &self.views.link) : (it = it.?.prev) {
+            const view: *View.Toplevel = @fieldParentPtr("link", it.?);
+            if (!view.mapped) continue;
+            const width: i32 = @divTrunc(box.width * view.width_percent, 100);
+            total_width += width + 20;
+        }
+
+        const min_scroll = box.width - total_width;
+        if (total_width > box.width) {
+            if (self.scroll_offset_x < min_scroll) {
+                self.scroll_offset_x = min_scroll;
+            }
+        } else {
+            self.scroll_offset_x = 0;
+        }
+    }
+
+    pub fn ensureViewVisible(self: *Workspace, view: *View.Toplevel) void {
+        if (self.layout_mode != .ribbon) return;
+
+        var box: wlr.Box = undefined;
+        if (self.server.display_mode == .spanned) {
+            self.server.output_layout.getBox(null, &box);
+        } else if (self.visible_on) |output| {
+            self.server.output_layout.getBox(output.wlr_output, &box);
+        } else return;
+
+        if (box.width <= 0) return;
+
+        const width: i32 = @divTrunc(box.width * view.width_percent, 100);
+        const view_x_start = view.x;
+        const view_x_end = view.x + width;
+
+        const visible_x_start = -self.scroll_offset_x;
+        const visible_x_end = -self.scroll_offset_x + box.width;
+
+        var new_scroll = self.scroll_offset_x;
+
+        // If the view is completely or partially off-screen
+        if (view_x_start < visible_x_start) {
+            // Priority 1: Align left edge
+            new_scroll = -view_x_start;
+        } else if (view_x_end > visible_x_end) {
+            // Priority 2: Align right edge
+            new_scroll = box.width - view_x_end;
+        }
+
+        if (new_scroll != self.scroll_offset_x) {
+            self.scroll_offset_x = new_scroll;
+            self.clampScroll(box);
+            std.log.info("info(sailer): Workspace '{s}' scrolling to focus: {} (View at {})", .{ self.name, self.scroll_offset_x, view_x_start });
+            self.arrange();
+        }
     }
 
     fn arrangeTiling(self: *Workspace) void {

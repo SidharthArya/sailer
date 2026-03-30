@@ -25,6 +25,12 @@ pub const Output = struct {
         wlr_output.events.frame.add(&output.frame);
         wlr_output.events.request_state.add(&output.request_state);
         wlr_output.events.destroy.add(&output.destroy);
+
+        // CRITICAL: Create the Wayland global for this output so that clients can see it.
+        // It must be created after initRender has set up the renderer.
+        wlr_output.createGlobal(server.wl_server);
+        errdefer wlr_output.destroyGlobal();
+
         server.outputs.prepend(output);
 
         // 2. Create the SceneOutput and register it with the output layout.
@@ -60,6 +66,7 @@ pub const Output = struct {
     ) void {
         const output: *Output = @fieldParentPtr("request_state", listener);
         _ = output.wlr_output.commitState(event.state);
+        output.server.updateLayout();
     }
 
     fn handleDestroy(listener: *wl.Listener(*wlr.Output), _: *wlr.Output) void {
