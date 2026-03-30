@@ -22,15 +22,18 @@ pub const Toplevel = struct {
     request_move: wl.Listener(*wlr.XdgToplevel.event.Move) = .init(Toplevel.handleRequestMove),
     request_resize: wl.Listener(*wlr.XdgToplevel.event.Resize) = .init(Toplevel.handleRequestResize),
 
-    fn handleCommit(listener: *wl.Listener(*wlr.Surface), _: *wlr.Surface) void {
+    fn handleCommit(listener: *wl.Listener(*wlr.Surface), surface: *wlr.Surface) void {
         const toplevel: *Toplevel = @fieldParentPtr("commit", listener);
         if (toplevel.xdg_toplevel.base.initial_commit) {
-            _ = wlr.XdgToplevel.setSize(toplevel.xdg_toplevel, 0, 0);
+            std.log.debug("Initial commit for: {s}", .{@as([*:0]const u8, @ptrCast(toplevel.xdg_toplevel.title orelse "unnamed"))});
+            _ = toplevel.xdg_toplevel.base.scheduleConfigure();
         }
+        _ = surface;
     }
 
     fn handleMap(listener: *wl.Listener(void)) void {
         const toplevel: *Toplevel = @fieldParentPtr("map", listener);
+        std.log.debug("View map: {s}", .{@as([*:0]const u8, @ptrCast(toplevel.xdg_toplevel.title orelse "unnamed"))});
         toplevel.mapped = true;
         toplevel.server.focusView(toplevel, toplevel.xdg_toplevel.base.surface);
         toplevel.workspace.arrange();
@@ -38,6 +41,7 @@ pub const Toplevel = struct {
 
     fn handleUnmap(listener: *wl.Listener(void)) void {
         const toplevel: *Toplevel = @fieldParentPtr("unmap", listener);
+        std.log.debug("View unmap: {s}", .{@as([*:0]const u8, @ptrCast(toplevel.xdg_toplevel.title orelse "unnamed"))});
         if (toplevel.server.grabbed_view == toplevel) {
             toplevel.server.grabbed_view = null;
         }

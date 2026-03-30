@@ -40,7 +40,7 @@ pub const Server = struct {
     new_xdg_toplevel: wl.Listener(*wlr.XdgToplevel) = .init(Server.newXdgToplevel),
     new_xdg_popup: wl.Listener(*wlr.XdgPopup) = .init(Server.newXdgPopup),
 
-    workspaces: [9]*Workspace = undefined,
+    workspaces: [10]*Workspace = undefined,
     focused_workspace: *Workspace = undefined,
 
     seat: *wlr.Seat,
@@ -79,67 +79,81 @@ pub const Server = struct {
     socket_name: []const u8 = "",
 
     pub fn init(server: *Server) !void {
-        const wl_server = try wl.Server.create();
-        const loop = wl_server.getEventLoop();
-        const backend = try wlr.Backend.autocreate(loop, @ptrCast(&server.session));
-        server.backend = backend;
-
-        const renderer = try wlr.Renderer.autocreate(backend);
-        server.renderer = renderer;
-
-        const output_layout = try wlr.OutputLayout.create(wl_server);
-        const scene = try wlr.Scene.create();
-        server.* = .{
-            .wl_server = wl_server,
-            .backend = backend,
-            .renderer = renderer,
-            .allocator = try wlr.Allocator.autocreate(backend, renderer),
-            .scene = scene,
-            .output_layout = output_layout,
-            .scene_output_layout = try scene.attachOutputLayout(output_layout),
-            .seat = try wlr.Seat.create(wl_server, "seat0"),
-            .xdg_shell = try wlr.XdgShell.create(wl_server, 3),
-            .cursor = try wlr.Cursor.create(),
-            .cursor_mgr = try wlr.XcursorManager.create(null, 24),
-            .sequence_timer = try loop.addTimer(*Server, handleSequenceTimeout, server),
-        };
-        server.sequence_timer.timerUpdate(0) catch {}; // Disarmed initially
-
-        try server.renderer.initServer(wl_server);
-
-        _ = try wlr.Compositor.create(server.wl_server, 6, server.renderer);
-        _ = try wlr.Subcompositor.create(server.wl_server);
-        // data device manager signature in zig-wlroots 0.19 requires only server
-        _ = try wlr.DataDeviceManager.create(server.wl_server);
-
-        server.backend.events.new_output.add(&server.new_output);
-
-        server.xdg_shell.events.new_toplevel.add(&server.new_xdg_toplevel);
-        server.xdg_shell.events.new_popup.add(&server.new_xdg_popup);
-
-        // Initialize 9 workspaces
-        for (&server.workspaces, 0..) |*ws, i| {
-            var name_buf: [2]u8 = undefined;
-            const name_str = std.fmt.bufPrint(&name_buf, "{d}", .{i + 1}) catch unreachable;
-            const name = try std.heap.c_allocator.dupe(u8, name_str);
-            ws.* = try Workspace.init(server, name);
-        }
-        server.focused_workspace = server.workspaces[0];
-
-        server.backend.events.new_input.add(&server.new_input);
-        server.seat.events.request_set_cursor.add(&server.request_set_cursor);
-        server.seat.events.request_set_selection.add(&server.request_set_selection);
+        // Initialize listeners and fields with defaults explicitly to avoid garbage
+        server.new_output = .init(Server.newOutput);
+        server.new_xdg_toplevel = .init(Server.newXdgToplevel);
+        server.new_xdg_popup = .init(Server.newXdgPopup);
+        server.new_input = .init(Server.newInput);
+        server.request_set_cursor = .init(Server.requestSetCursor);
+        server.request_set_selection = .init(Server.requestSetSelection);
+        server.cursor_motion = .init(Server.cursorMotion);
+        server.cursor_motion_absolute = .init(Server.cursorMotionAbsolute);
+        server.cursor_button = .init(Server.cursorButton);
+        server.cursor_axis = .init(Server.cursorAxis);
+        server.cursor_frame = .init(Server.cursorFrame);
         server.keyboards.init();
         server.outputs.init();
         server.toplevels.init();
+        server.current_sequence = .{};
+        server.session = null;
+        server.cursor_mode = .passthrough;
+        server.grabbed_view = null;
+        server.display_mode = .discrete;
+        server.socket_name = "";
+        server.last_mod_tap_ready = false;
+        server.last_mod_sym = null;
+        server.last_mod_timestamp = 0;
+        server.grab_x = 0;
+        server.grab_y = 0;
+        server.resize_edges = .{};
 
+        const wl_server = try wl.Server.create();
+        const loop = wl_server.getEventLoop();
+        const backend = try wlr.Backend.autocreate(loop, @ptrCast(&server.session));
+        const renderer = try wlr.Renderer.autocreate(backend);
+
+        server.wl_server = wl_server;
+        server.backend = backend;
+        server.renderer = renderer;
+        server.allocator = try wlr.Allocator.autocreate(backend, renderer);
+        server.scene = try wlr.Scene.create();
+        server.output_layout = try wlr.OutputLayout.create(wl_server);
+        server.scene_output_layout = try server.scene.attachOutputLayout(server.output_layout);
+        server.seat = try wlr.Seat.create(wl_server, "seat0");
+        server.xdg_shell = try wlr.XdgShell.create(wl_server, 3);
+        server.cursor = try wlr.Cursor.create();
         server.cursor.attachOutputLayout(server.output_layout);
-        try server.cursor_mgr.load(1);
+        server.cursor_mgr = try wlr.XcursorManager.create(null, 24);
+
+        server.backend.events.new_output.add(&server.new_output);
+        server.xdg_shell.events.new_toplevel.add(&server.new_xdg_toplevel);
+        server.xdg_shell.events.new_popup.add(&server.new_xdg_popup);
+        server.backend.events.new_input.add(&server.new_input);
+        server.seat.events.request_set_cursor.add(&server.request_set_cursor);
+        server.seat.events.request_set_selection.add(&server.request_set_selection);
+
         server.cursor.events.motion.add(&server.cursor_motion);
         server.cursor.events.motion_absolute.add(&server.cursor_motion_absolute);
         server.cursor.events.button.add(&server.cursor_button);
         server.cursor.events.axis.add(&server.cursor_axis);
         server.cursor.events.frame.add(&server.cursor_frame);
+
+        server.sequence_timer = try loop.addTimer(*Server, handleSequenceTimeout, server);
+        server.sequence_timer.timerUpdate(0) catch {};
+
+        try server.renderer.initServer(wl_server);
+        _ = try wlr.Compositor.create(server.wl_server, 6, server.renderer);
+        _ = try wlr.Subcompositor.create(server.wl_server);
+        _ = try wlr.DataDeviceManager.create(server.wl_server);
+
+        // Initialize 10 workspaces
+        for (&server.workspaces, 0..) |*ws, i| {
+            var name_buf: [3]u8 = undefined;
+            const name_str = std.fmt.bufPrint(&name_buf, "{d}", .{i + 1}) catch unreachable;
+            const name = try std.heap.c_allocator.dupe(u8, name_str);
+            ws.* = try Workspace.init(server, name);
+        }
+        server.focused_workspace = server.workspaces[0];
 
         server.config = Config.load(std.heap.c_allocator) catch |err| blk: {
             std.log.err("failed to load config: {}, using default", .{err});
@@ -188,7 +202,7 @@ pub const Server = struct {
     }
 
     pub fn spawn(server: *Server, cmd: []const u8) void {
-        std.log.info("Attempting to spawn: {s}", .{cmd});
+        std.log.info("Attempting to spawn: {s} (WAYLAND_DISPLAY={s})", .{ cmd, server.socket_name });
         var child = std.process.Child.init(&[_][]const u8{ "sh", "-c", cmd }, std.heap.c_allocator);
         var env = std.process.getEnvMap(std.heap.c_allocator) catch |err| {
             std.log.err("failed to get env map for spawn: {}", .{err});
@@ -205,10 +219,13 @@ pub const Server = struct {
     }
 
     pub fn updateLayout(server: *Server) void {
+
+        // 1. Ensure all outputs are in the layout and have a workspace assigned
         var it = server.outputs.link.next;
         while (it != &server.outputs.link) : (it = it.?.next) {
             const output: *Output = @fieldParentPtr("link", it.?);
 
+            // Re-add to layout (required after TTY resume)
             switch (server.display_mode) {
                 .discrete, .spanned => {
                     _ = server.output_layout.addAuto(output.wlr_output) catch {};
@@ -217,9 +234,26 @@ pub const Server = struct {
                     _ = server.output_layout.add(output.wlr_output, 0, 0) catch {};
                 },
             }
+
+            // Re-assign workspace if none is visible on this output
+            var has_ws = false;
+            for (server.workspaces) |ws| {
+                if (ws.visible_on == output) {
+                    has_ws = true;
+                    break;
+                }
+            }
+            if (!has_ws) {
+                for (server.workspaces) |ws| {
+                    if (ws.visible_on == null) {
+                        ws.visible_on = output;
+                        break;
+                    }
+                }
+            }
         }
 
-        // Update workspace positions and visibility
+        // 2. Update workspace positions and visibility
         for (server.workspaces) |ws| {
             if (ws.visible_on) |output| {
                 if (server.display_mode == .discrete) {
@@ -252,7 +286,6 @@ pub const Server = struct {
 
         server.new_input.link.remove();
         server.new_output.link.remove();
-
         server.new_xdg_toplevel.link.remove();
         server.new_xdg_popup.link.remove();
         server.request_set_cursor.link.remove();
@@ -263,6 +296,7 @@ pub const Server = struct {
         server.cursor_axis.link.remove();
         server.cursor_frame.link.remove();
 
+        server.current_sequence.deinit(std.heap.c_allocator);
         server.backend.destroy();
         server.wl_server.destroy();
     }
@@ -281,11 +315,16 @@ pub const Server = struct {
         }
         if (!wlr_output.commitState(&state)) return;
 
+        // CRITICAL: Create the wl_output Wayland global so that wlr_output.global
+        // is non-null. wlroots calls wlr_output_destroy_global inside wlr_output_destroy;
+        // if the global was never created, it crashes in libwayland-server.
+        wlr_output.createGlobal(server.wl_server);
+
         const output_ptr = Output.create(server, wlr_output) catch {
+            wlr_output.destroyGlobal();
             wlr_output.destroy();
             return;
         };
-        // Removed redundant prepend, Output.create already handles it
 
         server.updateLayout();
 
@@ -337,6 +376,7 @@ pub const Server = struct {
             }
         }
 
+        ws.arrange();
         xdg_surface.surface.events.commit.add(&toplevel.commit);
         xdg_surface.surface.events.map.add(&toplevel.map);
         xdg_surface.surface.events.unmap.add(&toplevel.unmap);
@@ -750,12 +790,13 @@ pub const Server = struct {
                 mods.logo == kb_mods.logo;
 
             if (mod_match) {
-                if (s < 128) {
-                    std.log.debug("Key match found: sym={} ({c}), mods={} (is_seq={})", .{ s, @as(u8, @intCast(s)), mods, is_sequence_step });
-                } else {
-                    std.log.debug("Key match found: sym={}, mods={} (is_seq={})", .{ s, mods, is_sequence_step });
-                }
+                std.log.debug("Key match SUCCESS: sym={}, mods={} (is_seq={})", .{ s, mods, is_sequence_step });
                 return true;
+            } else {
+                std.log.debug("Sym match but modifiers mismatch: expected (ctrl={}, shift={}, alt={}, logo={}), got (ctrl={}, shift={}, alt={}, logo={})", .{
+                    kb_mods.ctrl, kb_mods.shift, kb_mods.alt, kb_mods.logo,
+                    mods.ctrl,    mods.shift,    mods.alt,    mods.logo,
+                });
             }
         }
 
@@ -773,7 +814,7 @@ pub const Server = struct {
         server.sequence_timer.timerUpdate(1000) catch {};
 
         const current = server.current_sequence.items;
-        std.log.debug("Sequence current length: {}", .{current.len});
+        std.log.debug("Check bind: sym={}, mods={}, sequence_len={}", .{ key, mods, current.len });
 
         var any_match = false;
         var full_match = false;

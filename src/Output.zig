@@ -15,19 +15,20 @@ pub const Output = struct {
 
     pub fn create(server: *Server, wlr_output: *wlr.Output) !*Output {
         const output = try std.heap.c_allocator.create(Output);
-
         output.* = .{
             .server = server,
             .wlr_output = wlr_output,
         };
+
+        // 1. Register our listeners FIRST (at the head of the signal list in C libwayland).
+        // This matches the order in tinywl.zig and ensures we are at the head of the list.
         wlr_output.events.frame.add(&output.frame);
         wlr_output.events.request_state.add(&output.request_state);
         wlr_output.events.destroy.add(&output.destroy);
-
         server.outputs.prepend(output);
 
+        // 2. Create the SceneOutput and register it with the output layout.
         const layout_output = try server.output_layout.addAuto(wlr_output);
-
         const scene_output = try server.scene.createSceneOutput(wlr_output);
         server.scene_output_layout.addOutput(layout_output, scene_output);
 
@@ -37,10 +38,19 @@ pub const Output = struct {
     fn handleFrame(listener: *wl.Listener(*wlr.Output), _: *wlr.Output) void {
         const output: *Output = @fieldParentPtr("frame", listener);
 
-        const scene_output = output.server.scene.getSceneOutput(output.wlr_output).?;
-        _ = scene_output.commit(null);
+        const scene_output = output.server.scene.getSceneOutput(output.wlr_output) orelse {
+            var state = wlr.Output.State.init();
+            defer state.finish();
+            _ = output.wlr_output.commitState(&state);
+            return;
+        };
 
-        var now = posix.clock_gettime(posix.CLOCK.MONOTONIC) catch @panic("CLOCK_MONOTONIC not supported");
+        if (!scene_output.commit(null)) {
+            std.log.err("scene_output.commit failed on {s}", .{output.wlr_output.name});
+            return;
+        }
+
+        var now = posix.clock_gettime(posix.CLOCK.MONOTONIC) catch return;
         scene_output.sendFrameDone(&now);
     }
 
@@ -54,18 +64,19 @@ pub const Output = struct {
 
     fn handleDestroy(listener: *wl.Listener(*wlr.Output), _: *wlr.Output) void {
         const output: *Output = @fieldParentPtr("destroy", listener);
+        const server = output.server;
 
+        std.log.info("Output '{s}' destroyed", .{output.wlr_output.name});
+
+        output.destroy.link.remove();
         output.frame.link.remove();
         output.request_state.link.remove();
-        output.destroy.link.remove();
         output.link.remove();
 
-        const server = output.server;
-        std.heap.c_allocator.destroy(output);
-
-        if (server.outputs.link.next == &server.outputs.link) {
-            std.log.info("Last output destroyed, terminating server", .{});
-            server.wl_server.terminate();
+        for (server.workspaces) |ws| {
+            if (ws.visible_on == output) ws.visible_on = null;
         }
+
+        std.heap.c_allocator.destroy(output);
     }
 };

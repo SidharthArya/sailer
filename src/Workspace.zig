@@ -23,19 +23,26 @@ pub const Workspace = struct {
 
     pub fn init(server: *Server, name: []const u8) !*Workspace {
         const workspace = try std.heap.c_allocator.create(Workspace);
+        const scene_tree = try server.scene.tree.createSceneTree();
+        scene_tree.node.setEnabled(true);
         workspace.* = .{
             .server = server,
             .name = name,
             // Create a dedicated scene tree for this workspace.
             // All windows in this workspace will be children of this tree.
-            .scene_tree = try server.scene.tree.createSceneTree(),
+            .scene_tree = scene_tree,
             .visible_on = null,
             .layout_mode = .ribbon,
             .tiling_root = null,
         };
         workspace.views.init();
-        // Hide by default
-        workspace.scene_tree.node.setEnabled(false);
+        // Add a diagnostic background (vibrant red)
+        const bg = server.scene.tree.createSceneRect(8000, 8000, &[_]f32{ 1.0, 0.0, 0.0, 1.0 }) catch |err| {
+            std.log.err("Failed to create bg rect: {s}", .{@errorName(err)});
+            return workspace;
+        };
+        bg.node.setEnabled(true);
+        bg.node.reparent(workspace.scene_tree);
         return workspace;
     }
 
@@ -70,6 +77,7 @@ pub const Workspace = struct {
 
             _ = wlr.XdgToplevel.setSize(view.xdg_toplevel, width, height);
             view.scene_tree.node.setPosition(current_x, 0);
+            std.log.debug("Ribbon arrange: {s} -> {d},0 (size {d}x{d})", .{ @as([*:0]const u8, @ptrCast(view.xdg_toplevel.title orelse "unnamed")), current_x, width, height });
 
             view.x = current_x;
             view.y = 0;
@@ -78,16 +86,9 @@ pub const Workspace = struct {
         }
 
         // Apply scroll offset and output position
-        if (self.server.display_mode == .discrete) {
-            if (self.visible_on) |output| {
-                if (self.server.output_layout.get(output.wlr_output)) |l_output| {
-                    self.scene_tree.node.setPosition(l_output.x - self.scroll_offset_x, l_output.y);
-                }
-            }
-        } else {
-            // Spanned or Mirror: workspace tree stays at origin, only scroll offset applied
-            self.scene_tree.node.setPosition(-self.scroll_offset_x, 0);
-        }
+        // FORCE ORIGIN FOR VISIBILITY TEST
+        self.scene_tree.node.setPosition(0, 0);
+        std.log.debug("Workspace '{s}' FORCE positioned at 0,0", .{self.name});
     }
 
     fn arrangeTiling(self: *Workspace) void {
