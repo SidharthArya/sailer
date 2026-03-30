@@ -11,6 +11,14 @@ pub fn main() anyerror!void {
     try server.init();
     defer server.deinit();
 
+    // Prevent zombie processes from children
+    var sa = std.posix.Sigaction{
+        .handler = .{ .handler = std.posix.SIG.IGN },
+        .mask = std.posix.sigemptyset(),
+        .flags = std.posix.SA.NOCLDWAIT,
+    };
+    std.posix.sigaction(std.posix.SIG.CHLD, &sa, null);
+
     var buf: [11]u8 = undefined;
     const socket = try server.wl_server.addSocketAuto(&buf);
     server.socket_name = try gpa.dupe(u8, socket);

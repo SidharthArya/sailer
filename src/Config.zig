@@ -15,6 +15,8 @@ pub const Action = enum {
     smart_view,
     terminate,
     set_display_mode,
+    cycle_display_mode,
+    focus_output,
 };
 
 pub const DisplayMode = enum {

@@ -60,6 +60,7 @@ pub const Server = struct {
     cursor_frame: wl.Listener(*wlr.Cursor) = .init(Server.cursorFrame),
 
     config: std.json.Parsed(Config) = undefined,
+    display_mode: @import("Config.zig").DisplayMode = .discrete,
 
     current_sequence: std.ArrayListUnmanaged(KeyMatch) = .{},
     sequence_timer: *wl.EventSource = undefined,
@@ -146,6 +147,106 @@ pub const Server = struct {
         };
     }
 
+    pub fn warpCursorToOutput(server: *Server, wlr_output: *wlr.Output) void {
+        var box: wlr.Box = undefined;
+        server.output_layout.getBox(wlr_output, &box);
+        server.cursor.warpAbsolute(null, @as(f64, @floatFromInt(box.x + @divTrunc(box.width, 2))), @as(f64, @floatFromInt(box.y + @divTrunc(box.height, 2))));
+        server.processCursorMotion(0);
+    }
+
+    pub fn focusNextOutput(server: *Server) void {
+        const current_wlr = server.output_layout.outputAt(server.cursor.x, server.cursor.y) orelse {
+            if (server.outputs.link.next == &server.outputs.link) return;
+            const first: *Output = @fieldParentPtr("link", server.outputs.link.next.?);
+            server.warpCursorToOutput(first.wlr_output);
+            return;
+        };
+
+        var it = server.outputs.link.next;
+        while (it != &server.outputs.link) : (it = it.?.next) {
+            const out: *Output = @fieldParentPtr("link", it.?);
+            if (out.wlr_output == current_wlr) {
+                const next_link = if (it.?.next != &server.outputs.link) it.?.next else server.outputs.link.next;
+                const next_out: *Output = @fieldParentPtr("link", next_link.?);
+                server.warpCursorToOutput(next_out.wlr_output);
+
+                // Auto-focus the workspace/view on the new output
+                if (server.viewAt(server.cursor.x, server.cursor.y)) |res| {
+                    server.focusView(res.toplevel, res.surface);
+                } else {
+                    for (server.workspaces) |ws| {
+                        if (ws.visible_on != null and ws.visible_on.?.wlr_output == next_out.wlr_output) {
+                            server.focused_workspace = ws;
+                            server.seat.keyboardNotifyClearFocus();
+                            break;
+                        }
+                    }
+                }
+                return;
+            }
+        }
+    }
+
+    pub fn spawn(server: *Server, cmd: []const u8) void {
+        std.log.info("Attempting to spawn: {s}", .{cmd});
+        var child = std.process.Child.init(&[_][]const u8{ "sh", "-c", cmd }, std.heap.c_allocator);
+        var env = std.process.getEnvMap(std.heap.c_allocator) catch |err| {
+            std.log.err("failed to get env map for spawn: {}", .{err});
+            return;
+        };
+        defer env.deinit();
+        env.put("WAYLAND_DISPLAY", server.socket_name) catch {};
+        child.env_map = &env;
+        _ = child.spawn() catch |err| {
+            std.log.err("failed to spawn {s}: {}", .{ cmd, err });
+            return;
+        };
+        std.log.info("Successfully spawned: {s}", .{cmd});
+    }
+
+    pub fn updateLayout(server: *Server) void {
+        var it = server.outputs.link.next;
+        while (it != &server.outputs.link) : (it = it.?.next) {
+            const output: *Output = @fieldParentPtr("link", it.?);
+
+            switch (server.display_mode) {
+                .discrete, .spanned => {
+                    _ = server.output_layout.addAuto(output.wlr_output) catch {};
+                },
+                .mirror => {
+                    _ = server.output_layout.add(output.wlr_output, 0, 0) catch {};
+                },
+            }
+        }
+
+        // Update workspace positions and visibility
+        for (server.workspaces) |ws| {
+            if (ws.visible_on) |output| {
+                if (server.display_mode == .discrete) {
+                    var box: wlr.Box = undefined;
+                    server.output_layout.getBox(output.wlr_output, &box);
+                    ws.scene_tree.node.setPosition(box.x, box.y);
+                } else {
+                    ws.scene_tree.node.setPosition(0, 0);
+                }
+                // In Spanned/Mirror, only the focused workspace should be enabled globally
+                if (server.display_mode != .discrete) {
+                    ws.scene_tree.node.setEnabled(ws == server.focused_workspace);
+                } else {
+                    ws.scene_tree.node.setEnabled(true);
+                }
+                ws.arrange();
+            } else if (server.display_mode != .discrete and ws == server.focused_workspace) {
+                // Spanned/Mirror: focused workspace is always visible at origin
+                ws.scene_tree.node.setPosition(0, 0);
+                ws.scene_tree.node.setEnabled(true);
+                ws.arrange();
+            } else {
+                ws.scene_tree.node.setEnabled(false);
+            }
+        }
+    }
+
     pub fn deinit(server: *Server) void {
         server.wl_server.destroyClients();
 
@@ -184,17 +285,17 @@ pub const Server = struct {
             wlr_output.destroy();
             return;
         };
-        server.outputs.prepend(output_ptr);
+        // Removed redundant prepend, Output.create already handles it
 
-        // Assign this output to the first hidden workspace
-        for (&server.workspaces) |*ws| {
-            if (ws.*.visible_on == null) {
-                ws.*.setVisible(output_ptr);
-                if (server.focused_workspace == ws.*) {
-                    // Update focus if this is the first monitor initializing our focused workspace
+        server.updateLayout();
+
+        if (server.display_mode == .discrete) {
+            // Assign this output to the first hidden workspace
+            for (server.workspaces) |ws| {
+                if (ws.visible_on == null) {
+                    ws.setVisible(output_ptr);
                     break;
                 }
-                break;
             }
         }
     }
@@ -285,7 +386,10 @@ pub const Server = struct {
 
             var it: ?*wlr.SceneTree = node.parent;
             while (it) |n| : (it = n.node.parent) {
-                if (@as(?*Toplevel, @ptrCast(@alignCast(n.node.data)))) |toplevel| {
+                // We use node.data to identify toplevels.
+                // It's a bit risky but we avoid complex lookups for now.
+                if (n.node.data) |data| {
+                    const toplevel: *Toplevel = @ptrCast(@alignCast(data));
                     return ViewAtResult{
                         .toplevel = toplevel,
                         .surface = scene_surface.surface,
@@ -302,30 +406,62 @@ pub const Server = struct {
         if (server.seat.keyboard_state.focused_surface) |previous_surface| {
             if (previous_surface == surface) return;
             if (wlr.XdgSurface.tryFromWlrSurface(previous_surface)) |xdg_surface| {
-                _ = wlr.XdgToplevel.setActivated(xdg_surface.role_data.toplevel.?, false);
+                if (xdg_surface.role_data.toplevel) |prev_t| {
+                    _ = wlr.XdgToplevel.setActivated(prev_t, false);
+                }
             }
         }
 
+        // Sync focused workspace to the view's workspace
+        server.focused_workspace = toplevel.workspace;
+
+        // Keep physical order stable for Ribbon navigation.
+        // We only raise the scene node for visual priority.
         toplevel.scene_tree.node.raiseToTop();
-        toplevel.link.remove();
-        server.focused_workspace.views.prepend(toplevel);
+        // Skip: toplevel.workspace.views.prepend(toplevel);
 
         _ = wlr.XdgToplevel.setActivated(toplevel.xdg_toplevel, true);
 
         if (server.seat.keyboard_state.keyboard) |kbd| {
             wlr.Seat.keyboardNotifyEnter(server.seat, surface, kbd.keycodes[0..kbd.num_keycodes], &kbd.modifiers);
+        } else {
+            wlr.Seat.keyboardNotifyEnter(server.seat, surface, &[_]u32{}, &wlr.Keyboard.Modifiers{
+                .depressed = 0,
+                .latched = 0,
+                .locked = 0,
+                .group = 0,
+            });
         }
 
-        // Niri style scrolling: Center the focused view on its workspace visible output
-        if (toplevel.workspace.visible_on) |output| {
-            if (server.output_layout.get(output.wlr_output)) |l_output| {
+        // Niri style scrolling
+        const ws = toplevel.workspace;
+        const s = server;
+        if (s.display_mode == .discrete) {
+            if (ws.visible_on) |output| {
                 var box: wlr.Box = undefined;
-                server.output_layout.getBox(l_output.output, &box);
+                s.output_layout.getBox(output.wlr_output, &box);
                 const view_width = @divTrunc(box.width * toplevel.width_percent, 100);
-                toplevel.workspace.scroll_offset_x = toplevel.x - @divTrunc(box.width - view_width, 2);
-                toplevel.workspace.arrange();
+                ws.scroll_offset_x = toplevel.x - @divTrunc(box.width - view_width, 2);
+            }
+        } else {
+            // Spanned or Mirror: use monitor where cursor is
+            var output = s.output_layout.outputAt(s.cursor.x, s.cursor.y);
+            if (output == null) {
+                // Fallback to first output
+                if (s.outputs.link.next != &s.outputs.link) {
+                    output = (@as(*Output, @fieldParentPtr("link", s.outputs.link.next.?))).wlr_output;
+                }
+            }
+
+            if (output) |o| {
+                var box: wlr.Box = undefined;
+                s.output_layout.getBox(o, &box);
+                const view_width = @divTrunc(box.width * toplevel.width_percent, 100);
+                // Snap to this monitor's coordinates within the workspace
+                ws.scroll_offset_x = toplevel.x - (box.x + @divTrunc(box.width - view_width, 2));
             }
         }
+        ws.arrange();
     }
 
     fn newInput(listener: *wl.Listener(*wlr.InputDevice), device: *wlr.InputDevice) void {
@@ -439,11 +575,20 @@ pub const Server = struct {
         event: *wlr.Pointer.event.Button,
     ) void {
         const server: *Server = @fieldParentPtr("cursor_button", listener);
-        _ = wlr.Seat.pointerNotifyButton(server.seat, event.time_msec, event.button, event.state);
+        _ = server.seat.pointerNotifyButton(event.time_msec, event.button, event.state);
+
         if (event.state == .released) {
             server.cursor_mode = .passthrough;
         } else if (server.viewAt(server.cursor.x, server.cursor.y)) |res| {
             server.focusView(res.toplevel, res.surface);
+        } else if (server.output_layout.outputAt(server.cursor.x, server.cursor.y)) |wlr_out| {
+            for (server.workspaces) |ws| {
+                if (ws.visible_on != null and ws.visible_on.?.wlr_output == wlr_out) {
+                    server.focused_workspace = ws;
+                    server.seat.keyboardNotifyClearFocus();
+                    break;
+                }
+            }
         }
     }
 
@@ -486,6 +631,7 @@ pub const Server = struct {
         }
 
         server.focused_workspace = target_ws;
+        server.updateLayout();
 
         // Focus topmost window in new workspace
         if (target_ws.views.link.next != &target_ws.views.link) {
@@ -527,12 +673,7 @@ pub const Server = struct {
                 server.wl_server.terminate();
             },
             .spawn => if (kb.command) |cmd| {
-                var child = std.process.Child.init(&[_][]const u8{ "sh", "-c", cmd }, std.heap.c_allocator);
-                var env = std.process.getEnvMap(std.heap.c_allocator) catch return;
-                defer env.deinit();
-                env.put("WAYLAND_DISPLAY", server.socket_name) catch {};
-                child.env_map = &env;
-                _ = child.spawn() catch {};
+                server.spawn(cmd);
             },
             .focus_left => server.focused_workspace.focusRelative(-1),
             .focus_right => server.focused_workspace.focusRelative(1),
@@ -569,6 +710,19 @@ pub const Server = struct {
             .switch_workspace => if (kb.workspace_index) |idx| {
                 server.switchToWorkspace(idx - 1);
             },
+            .set_display_mode => if (kb.display_mode) |mode| {
+                server.display_mode = mode;
+                server.updateLayout();
+            },
+            .cycle_display_mode => {
+                server.display_mode = switch (server.display_mode) {
+                    .discrete => .spanned,
+                    .spanned => .mirror,
+                    .mirror => .discrete,
+                };
+                server.updateLayout();
+            },
+            .focus_output => server.focusNextOutput(),
         }
     }
 

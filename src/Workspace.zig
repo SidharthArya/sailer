@@ -48,10 +48,12 @@ pub const Workspace = struct {
     }
 
     fn arrangeRibbon(self: *Workspace) void {
-        const output = self.visible_on orelse return;
-
         var box: wlr.Box = undefined;
-        self.server.output_layout.getBox(output.wlr_output, &box);
+        if (self.server.display_mode == .spanned) {
+            self.server.output_layout.getBox(null, &box);
+        } else if (self.visible_on) |output| {
+            self.server.output_layout.getBox(output.wlr_output, &box);
+        } else return;
 
         var current_x: i32 = 0;
 
@@ -60,7 +62,6 @@ pub const Workspace = struct {
         while (it != &self.views.link) : (it = it.?.prev) {
             const view: *View.Toplevel = @fieldParentPtr("link", it.?);
             if (!view.mapped) {
-                it = it.?.prev;
                 continue;
             }
 
@@ -77,30 +78,48 @@ pub const Workspace = struct {
         }
 
         // Apply scroll offset and output position
-        if (self.server.output_layout.get(output.wlr_output)) |l_output| {
-            self.scene_tree.node.setPosition(l_output.x - self.scroll_offset_x, l_output.y);
+        if (self.server.display_mode == .discrete) {
+            if (self.visible_on) |output| {
+                if (self.server.output_layout.get(output.wlr_output)) |l_output| {
+                    self.scene_tree.node.setPosition(l_output.x - self.scroll_offset_x, l_output.y);
+                }
+            }
+        } else {
+            // Spanned or Mirror: workspace tree stays at origin, only scroll offset applied
+            self.scene_tree.node.setPosition(-self.scroll_offset_x, 0);
         }
     }
 
     fn arrangeTiling(self: *Workspace) void {
-        const output = self.visible_on orelse return;
         var box: wlr.Box = undefined;
-        self.server.output_layout.getBox(output.wlr_output, &box);
+        if (self.server.display_mode == .spanned) {
+            self.server.output_layout.getBox(null, &box);
+        } else if (self.visible_on) |output| {
+            self.server.output_layout.getBox(output.wlr_output, &box);
+        } else return;
 
         if (self.tiling_root) |root| {
             root.arrange(box);
         }
 
-        // Apply output position (tiling usually handles its own x/y within the box)
-        if (self.server.output_layout.get(output.wlr_output)) |l_output| {
-            self.scene_tree.node.setPosition(l_output.x, l_output.y);
+        if (self.server.display_mode == .discrete) {
+            if (self.visible_on) |output| {
+                if (self.server.output_layout.get(output.wlr_output)) |l_output| {
+                    self.scene_tree.node.setPosition(l_output.x, l_output.y);
+                }
+            }
+        } else {
+            self.scene_tree.node.setPosition(0, 0);
         }
     }
 
     fn arrangeSmartView(self: *Workspace) void {
-        const output = self.visible_on orelse return;
         var box: wlr.Box = undefined;
-        self.server.output_layout.getBox(output.wlr_output, &box);
+        if (self.server.display_mode == .spanned) {
+            self.server.output_layout.getBox(null, &box);
+        } else if (self.visible_on) |output| {
+            self.server.output_layout.getBox(output.wlr_output, &box);
+        } else return;
 
         var count: i32 = 0;
         var it = self.views.link.next;
@@ -135,8 +154,14 @@ pub const Workspace = struct {
             i += 1;
         }
 
-        if (self.server.output_layout.get(output.wlr_output)) |l_output| {
-            self.scene_tree.node.setPosition(l_output.x, l_output.y);
+        if (self.server.display_mode == .discrete) {
+            if (self.visible_on) |output| {
+                if (self.server.output_layout.get(output.wlr_output)) |l_output| {
+                    self.scene_tree.node.setPosition(l_output.x, l_output.y);
+                }
+            }
+        } else {
+            self.scene_tree.node.setPosition(0, 0);
         }
     }
 
