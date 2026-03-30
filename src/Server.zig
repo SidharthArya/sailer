@@ -42,12 +42,15 @@ pub const Server = struct {
     cursor_axis: wl.Listener(*wlr.Pointer.event.Axis) = .init(Server.cursorAxis),
     cursor_frame: wl.Listener(*wlr.Cursor) = .init(Server.cursorFrame),
 
+    config: std.json.Parsed(@import("Config.zig").Config) = undefined,
+
     cursor_mode: enum { passthrough, move, resize } = .passthrough,
     grabbed_view: ?*Toplevel = null,
     grab_x: f64 = 0,
     grab_y: f64 = 0,
     grab_box: wlr.Box = undefined,
     resize_edges: wlr.Edges = .{},
+    socket_name: []const u8 = "",
 
     pub fn init(server: *Server) !void {
         const wl_server = try wl.Server.create();
@@ -103,6 +106,12 @@ pub const Server = struct {
         server.cursor.events.button.add(&server.cursor_button);
         server.cursor.events.axis.add(&server.cursor_axis);
         server.cursor.events.frame.add(&server.cursor_frame);
+
+        const Config = @import("Config.zig").Config;
+        server.config = Config.load(std.heap.c_allocator) catch |err| blk: {
+            std.log.err("failed to load config: {}, using default", .{err});
+            break :blk Config.default(std.heap.c_allocator) catch unreachable;
+        };
     }
 
     pub fn deinit(server: *Server) void {
@@ -442,85 +451,78 @@ pub const Server = struct {
     }
 
     pub fn handleKeybind(server: *Server, key: xkb.Keysym, mods: wlr.Keyboard.ModifierMask) bool {
-        switch (@intFromEnum(key)) {
-            xkb.Keysym.Escape => server.wl_server.terminate(),
-            xkb.Keysym.Return => {
-                _ = std.process.Child.run(.{
-                    .allocator = std.heap.c_allocator,
-                    .argv = &[_][]const u8{"foot"},
-                }) catch return true;
-                return true;
-            },
-            xkb.Keysym.h => {
-                if (mods.ctrl) {
-                    if (mods.shift) {
-                        // Resize shrink
-                        if (server.seat.keyboard_state.focused_surface) |surface| {
-                            if (wlr.XdgSurface.tryFromWlrSurface(surface)) |xdg_surface| {
-                                if (View.fromXdgSurface(xdg_surface)) |t| {
-                                    t.width_percent = @max(10, t.width_percent - 5);
-                                    t.workspace.arrange();
-                                }
+        // Log all keypresses to help debugging config issues
+        std.log.info("KeyPress: sym={d}, mods(c={}, s={}, a={}, l={})", .{ @intFromEnum(key), mods.ctrl, mods.shift, mods.alt, mods.logo });
+
+        for (server.config.value.keybindings) |kb| {
+            const kb_sym = kb.getKeysym();
+            const kb_mods = kb.getModifiers();
+
+            // Log what we are checking against
+            std.log.info("Checking against: sym={d}, mods(c={}, s={}, a={}, l={})", .{ @intFromEnum(kb_sym), kb_mods.ctrl, kb_mods.shift, kb_mods.alt, kb_mods.logo });
+
+            if (@intFromEnum(key) == @intFromEnum(kb_sym) and
+                mods.ctrl == kb_mods.ctrl and
+                mods.shift == kb_mods.shift and
+                mods.alt == kb_mods.alt and
+                mods.logo == kb_mods.logo)
+            {
+                std.log.info("Keybinding Match Found: action={any}", .{kb.action});
+                switch (kb.action) {
+                    .spawn => if (kb.command) |cmd| {
+                        std.log.info("Spawning: {s}", .{cmd});
+                        var child = std.process.Child.init(&[_][]const u8{ "sh", "-c", cmd }, std.heap.c_allocator);
+
+                        var env = std.process.getEnvMap(std.heap.c_allocator) catch {
+                            return true;
+                        };
+                        defer env.deinit();
+                        env.put("WAYLAND_DISPLAY", server.socket_name) catch {};
+                        child.env_map = &env;
+
+                        _ = child.spawn() catch |err| {
+                            std.log.err("failed to spawn command '{s}': {any}", .{ cmd, err });
+                        };
+                    },
+                    .focus_left => server.focused_workspace.focusRelative(-1),
+                    .focus_right => server.focused_workspace.focusRelative(1),
+                    .resize_shrink => if (server.seat.keyboard_state.focused_surface) |surface| {
+                        if (wlr.XdgSurface.tryFromWlrSurface(surface)) |xdg_surface| {
+                            if (View.fromXdgSurface(xdg_surface)) |t| {
+                                t.width_percent = @max(10, t.width_percent - 5);
+                                t.workspace.arrange();
                             }
                         }
-                    } else {
-                        // Focus left
-                        server.focused_workspace.focusRelative(-1);
-                    }
-                    return true;
-                }
-            },
-            xkb.Keysym.l => {
-                if (mods.ctrl) {
-                    if (mods.shift) {
-                        // Resize expand
-                        if (server.seat.keyboard_state.focused_surface) |surface| {
-                            if (wlr.XdgSurface.tryFromWlrSurface(surface)) |xdg_surface| {
-                                if (View.fromXdgSurface(xdg_surface)) |t| {
-                                    t.width_percent = @min(100, t.width_percent + 5);
-                                    t.workspace.arrange();
-                                }
+                    },
+                    .resize_expand => if (server.seat.keyboard_state.focused_surface) |surface| {
+                        if (wlr.XdgSurface.tryFromWlrSurface(surface)) |xdg_surface| {
+                            if (View.fromXdgSurface(xdg_surface)) |t| {
+                                t.width_percent = @min(100, t.width_percent + 5);
+                                t.workspace.arrange();
                             }
                         }
-                    } else {
-                        // Focus right
-                        server.focused_workspace.focusRelative(1);
-                    }
-                    return true;
-                }
-            },
-            xkb.Keysym.j => {
-                if (mods.ctrl and mods.shift) {
-                    if (server.seat.keyboard_state.focused_surface) |surface| {
+                    },
+                    .reorder_left => if (server.seat.keyboard_state.focused_surface) |surface| {
                         if (wlr.XdgSurface.tryFromWlrSurface(surface)) |xdg_surface| {
                             if (View.fromXdgSurface(xdg_surface)) |t| {
                                 t.workspace.reorderView(t, -1);
                             }
                         }
-                    }
-                    return true;
-                }
-            },
-            xkb.Keysym.k => {
-                if (mods.ctrl and mods.shift) {
-                    if (server.seat.keyboard_state.focused_surface) |surface| {
+                    },
+                    .reorder_right => if (server.seat.keyboard_state.focused_surface) |surface| {
                         if (wlr.XdgSurface.tryFromWlrSurface(surface)) |xdg_surface| {
                             if (View.fromXdgSurface(xdg_surface)) |t| {
                                 t.workspace.reorderView(t, 1);
                             }
                         }
-                    }
-                    return true;
+                    },
+                    .switch_workspace => if (kb.workspace_index) |idx| {
+                        server.switchToWorkspace(idx - 1);
+                    },
+                    .terminate => server.wl_server.terminate(),
                 }
-            },
-            xkb.Keysym.@"1", xkb.Keysym.@"2", xkb.Keysym.@"3", xkb.Keysym.@"4", xkb.Keysym.@"5", xkb.Keysym.@"6", xkb.Keysym.@"7", xkb.Keysym.@"8", xkb.Keysym.@"9" => {
-                if (mods.ctrl) {
-                    const ws_idx = (@intFromEnum(key) - @as(u32, xkb.Keysym.@"1"));
-                    server.switchToWorkspace(ws_idx);
-                    return true;
-                }
-            },
-            else => {},
+                return true;
+            }
         }
         return false;
     }

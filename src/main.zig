@@ -13,6 +13,7 @@ pub fn main() anyerror!void {
 
     var buf: [11]u8 = undefined;
     const socket = try server.wl_server.addSocketAuto(&buf);
+    server.socket_name = try gpa.dupe(u8, socket);
 
     if (std.os.argv.len >= 2) {
         const cmd = std.mem.span(std.os.argv[1]);

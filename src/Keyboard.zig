@@ -74,7 +74,7 @@ fn handleKey(listener: *wl.Listener(*wlr.Keyboard.event.Key), event: *wlr.Keyboa
     const keycode = event.keycode + 8;
 
     var handled = false;
-    if (wlr_keyboard.getModifiers().ctrl and event.state == .pressed) {
+    if (event.state == .pressed) {
         if (wlr_keyboard.xkb_state) |state| {
             const mods = wlr_keyboard.getModifiers();
             for (state.keyGetSyms(keycode)) |sym| {
