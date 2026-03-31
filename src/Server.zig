@@ -11,6 +11,7 @@ const KeyboardDevice = @import("Keyboard.zig").KeyboardDevice;
 const Workspace = @import("Workspace.zig").Workspace;
 const Config = @import("Config.zig").Config;
 const Keybinding = @import("Config.zig").Keybinding;
+const McpServer = @import("Mcp.zig").McpServer;
 
 pub const KeyMatch = struct {
     sym: xkb.Keysym,
@@ -80,6 +81,7 @@ pub const Server = struct {
     resize_edges: wlr.Edges = .{},
     socket_name: []const u8 = "",
     socket_name_buf: [11]u8 = undefined,
+    mcp: ?*McpServer = null,
 
     pub fn init(server: *Server) !void {
         // Initialize listeners and fields with defaults explicitly to avoid garbage
@@ -169,6 +171,11 @@ pub const Server = struct {
 
         server.socket_name = try wl_server.addSocketAuto(&server.socket_name_buf);
         std.log.info("Running compositor on WAYLAND_DISPLAY={s}", .{server.socket_name});
+
+        server.mcp = McpServer.init(server, std.heap.c_allocator) catch |err| blk: {
+            std.log.err("failed to initialize MCP server: {}", .{err});
+            break :blk null;
+        };
     }
 
 
