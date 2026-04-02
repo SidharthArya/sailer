@@ -9,6 +9,7 @@ pub const Toplevel = struct {
     link: wl.list.Link = undefined,
     xdg_toplevel: *wlr.XdgToplevel,
     scene_tree: *wlr.SceneTree,
+    xdg_surface_tree: *wlr.SceneTree,
 
     x: i32 = 0,
     y: i32 = 0,
@@ -20,6 +21,14 @@ pub const Toplevel = struct {
     marked: bool = false,
     hidden: bool = false,
     urgent: bool = false,
+    border_width: i32 = 2,
+    active_border_color: [4]f32 = .{ 0.38, 0.44, 0.60, 1.0 },
+    inactive_border_color: [4]f32 = .{ 0.15, 0.17, 0.23, 1.0 },
+    border_top: ?*wlr.SceneRect = null,
+    border_bottom: ?*wlr.SceneRect = null,
+    border_left: ?*wlr.SceneRect = null,
+    border_right: ?*wlr.SceneRect = null,
+    
 
     commit: wl.Listener(*wlr.Surface) = .init(Toplevel.handleCommit),
     map: wl.Listener(void) = .init(Toplevel.handleMap),
@@ -27,6 +36,43 @@ pub const Toplevel = struct {
     destroy: wl.Listener(void) = .init(Toplevel.handleDestroy),
     request_move: wl.Listener(*wlr.XdgToplevel.event.Move) = .init(Toplevel.handleRequestMove),
     request_resize: wl.Listener(*wlr.XdgToplevel.event.Resize) = .init(Toplevel.handleRequestResize),
+
+    pub fn updateBorderColor(self: *Toplevel, color: *const [4]f32) void {
+        if (self.border_top) |r| r.node.data = @as(?*anyopaque, @constCast(color));
+        if (self.border_bottom) |r| r.node.data = @as(?*anyopaque, @constCast(color));
+        if (self.border_left) |r| r.node.data = @as(?*anyopaque, @constCast(color));
+        if (self.border_right) |r| r.node.data = @as(?*anyopaque, @constCast(color));
+        // Wait, setColor is the correct way, let's keep it if it exists.
+        if (self.border_top) |r| r.setColor(color);
+        if (self.border_bottom) |r| r.setColor(color);
+        if (self.border_left) |r| r.setColor(color);
+        if (self.border_right) |r| r.setColor(color);
+    }
+
+    pub fn updateLayout(self: *Toplevel, width: i32, height: i32) void {
+        const bw = self.border_width;
+
+        // Position surface inside borders
+        self.xdg_surface_tree.node.setPosition(bw, bw);
+
+        // Update borders positions and sizes
+        if (self.border_top) |r| {
+            r.setSize(width - 2 * bw, bw);
+            r.node.setPosition(bw, 0);
+        }
+        if (self.border_bottom) |r| {
+            r.setSize(width - 2 * bw, bw);
+            r.node.setPosition(bw, height - bw);
+        }
+        if (self.border_left) |r| {
+            r.setSize(bw, height);
+            r.node.setPosition(0, 0);
+        }
+        if (self.border_right) |r| {
+            r.setSize(bw, height);
+            r.node.setPosition(width - bw, 0);
+        }
+    }
 
     fn handleCommit(listener: *wl.Listener(*wlr.Surface), surface: *wlr.Surface) void {
         const toplevel: *Toplevel = @fieldParentPtr("commit", listener);

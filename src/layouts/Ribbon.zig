@@ -33,10 +33,16 @@ pub const Ribbon = struct {
             if (min_h > 0) height = @max(height, min_h);
             if (max_h > 0) height = @min(height, max_h);
 
+            const bw = view.border_width;
+            const xdg_w = @max(1, width - 2 * bw);
+            const xdg_h = @max(1, height - 2 * bw);
+
             // Smart Resize: Only send configure if target dimensions actually changed.
-            if (view.xdg_toplevel.current.width != width or view.xdg_toplevel.current.height != height) {
-                _ = wlr.XdgToplevel.setSize(view.xdg_toplevel, width, height);
+            if (view.xdg_toplevel.current.width != xdg_w or view.xdg_toplevel.current.height != xdg_h) {
+                _ = wlr.XdgToplevel.setSize(view.xdg_toplevel, xdg_w, xdg_h);
             }
+
+            view.updateLayout(width, height);
 
             // Center within its logical slot if it's smaller than its allocated width
             const offset_x = @divTrunc(target_width - width, 2);

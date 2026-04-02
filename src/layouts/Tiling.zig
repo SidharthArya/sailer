@@ -81,9 +81,15 @@ pub const TilingNode = struct {
                 if (min_h > 0) height = @max(height, min_h);
                 if (max_h > 0) height = @min(height, max_h);
 
-                if (v.xdg_toplevel.current.width != width or v.xdg_toplevel.current.height != height) {
-                    _ = wlr.XdgToplevel.setSize(v.xdg_toplevel, width, height);
+                const bw = v.border_width;
+                const xdg_w = @max(1, width - 2 * bw);
+                const xdg_h = @max(1, height - 2 * bw);
+
+                if (v.xdg_toplevel.current.width != xdg_w or v.xdg_toplevel.current.height != xdg_h) {
+                    _ = wlr.XdgToplevel.setSize(v.xdg_toplevel, xdg_w, xdg_h);
                 }
+
+                v.updateLayout(width, height);
 
                 const offset_x = @divTrunc(box.width - width, 2);
                 const offset_y = @divTrunc(box.height - height, 2);

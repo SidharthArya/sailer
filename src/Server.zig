@@ -375,18 +375,36 @@ pub const Server = struct {
         };
 
         const ws = server.focused_workspace;
+        toplevel.server = server;
+        const container = ws.scene_tree.createSceneTree() catch {
+            std.heap.c_allocator.destroy(toplevel);
+            std.log.err("failed to allocate container scene tree", .{});
+            return;
+        };
+
+        const xdg_surface_tree = container.createSceneXdgSurface(xdg_surface) catch {
+            container.node.destroy();
+            std.heap.c_allocator.destroy(toplevel);
+            std.log.err("failed to allocate xdg surface scene tree", .{});
+            return;
+        };
+
         toplevel.* = .{
             .server = server,
             .workspace = ws,
             .xdg_toplevel = xdg_toplevel,
-            .scene_tree = ws.scene_tree.createSceneXdgSurface(xdg_surface) catch {
-                std.heap.c_allocator.destroy(toplevel);
-                std.log.err("failed to allocate new toplevel scene tree", .{});
-                return;
-            },
+            .scene_tree = container,
+            .xdg_surface_tree = xdg_surface_tree,
         };
-        toplevel.scene_tree.node.data = toplevel;
-        xdg_surface.data = toplevel.scene_tree;
+
+        // Initialize border rects
+        toplevel.border_top = container.createSceneRect(0, 0, &toplevel.inactive_border_color) catch null;
+        toplevel.border_bottom = container.createSceneRect(0, 0, &toplevel.inactive_border_color) catch null;
+        toplevel.border_left = container.createSceneRect(0, 0, &toplevel.inactive_border_color) catch null;
+        toplevel.border_right = container.createSceneRect(0, 0, &toplevel.inactive_border_color) catch null;
+
+        container.node.data = toplevel;
+        xdg_surface.data = container;
 
         // Add to workspace list immediately so link is valid for remove() later
         ws.views.prepend(toplevel);
@@ -473,6 +491,9 @@ pub const Server = struct {
             if (wlr.XdgSurface.tryFromWlrSurface(previous_surface)) |xdg_surface| {
                 if (xdg_surface.role_data.toplevel) |prev_t| {
                     _ = wlr.XdgToplevel.setActivated(prev_t, false);
+                    if (View.fromXdgSurface(xdg_surface)) |v| {
+                        v.updateBorderColor(&v.inactive_border_color);
+                    }
                 }
             }
         }
@@ -480,6 +501,7 @@ pub const Server = struct {
         // Sync focused workspace to the view's workspace
         server.focused_workspace = toplevel.workspace;
         toplevel.workspace.ensureViewVisible(toplevel);
+        toplevel.updateBorderColor(&toplevel.active_border_color);
 
         // Keep physical order stable for Ribbon navigation.
         // We only raise the scene node for visual priority.

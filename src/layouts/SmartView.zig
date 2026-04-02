@@ -44,9 +44,15 @@ pub const SmartView = struct {
             if (min_h > 0) height = @max(height, min_h);
             if (max_h > 0) height = @min(height, max_h);
 
-            if (view.xdg_toplevel.current.width != width or view.xdg_toplevel.current.height != height) {
-                _ = wlr.XdgToplevel.setSize(view.xdg_toplevel, width, height);
+            const bw = view.border_width;
+            const xdg_w = @max(1, width - 2 * bw);
+            const xdg_h = @max(1, height - 2 * bw);
+
+            if (view.xdg_toplevel.current.width != xdg_w or view.xdg_toplevel.current.height != xdg_h) {
+                _ = wlr.XdgToplevel.setSize(view.xdg_toplevel, xdg_w, xdg_h);
             }
+
+            view.updateLayout(width, height);
 
             const offset_x = @divTrunc(cell_width - width, 2);
             const offset_y = @divTrunc(cell_height - height, 2);
