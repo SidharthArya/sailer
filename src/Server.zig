@@ -37,6 +37,7 @@ pub const Server = struct {
 
     output_layout: *wlr.OutputLayout,
     scene_output_layout: *wlr.SceneOutputLayout,
+    bg_tree: *wlr.SceneTree,
     new_output: wl.Listener(*wlr.Output) = .init(Server.newOutput),
 
     xdg_shell: *wlr.XdgShell,
@@ -66,6 +67,7 @@ pub const Server = struct {
 
     config: std.json.Parsed(Config) = undefined,
     display_mode: @import("Config.zig").DisplayMode = .discrete,
+    bg_color: [4]f32 = .{ 1.0, 0.0, 0.0, 1.0 },
 
     current_sequence: std.ArrayListUnmanaged(KeyMatch) = .{},
     sequence_timer: *wl.EventSource = undefined,
@@ -113,6 +115,7 @@ pub const Server = struct {
         server.grab_x = 0;
         server.grab_y = 0;
         server.resize_edges = .{};
+        server.bg_color = .{ 0.15, 0.17, 0.23, 1.0 }; // Elegant dark gray
 
         const wl_server = try wl.Server.create();
         const loop = wl_server.getEventLoop();
@@ -126,6 +129,8 @@ pub const Server = struct {
         server.scene = try wlr.Scene.create();
         server.output_layout = try wlr.OutputLayout.create(wl_server);
         server.scene_output_layout = try server.scene.attachOutputLayout(server.output_layout);
+        server.bg_tree = try server.scene.tree.createSceneTree();
+        server.bg_tree.node.setEnabled(true);
         server.seat = try wlr.Seat.create(wl_server, "seat0");
         server.xdg_shell = try wlr.XdgShell.create(wl_server, 3);
         server.xdg_activation = try wlr.XdgActivationV1.create(wl_server);

@@ -12,6 +12,7 @@ pub const Output = struct {
     frame: wl.Listener(*wlr.Output) = .init(Output.handleFrame),
     request_state: wl.Listener(*wlr.Output.event.RequestState) = .init(Output.handleRequestState),
     destroy: wl.Listener(*wlr.Output) = .init(Output.handleDestroy),
+    background: ?*wlr.SceneRect = null,
 
     pub fn create(server: *Server, wlr_output: *wlr.Output) !*Output {
         const output = try std.heap.c_allocator.create(Output);
@@ -38,6 +39,16 @@ pub const Output = struct {
         const scene_output = try server.scene.createSceneOutput(wlr_output);
         server.scene_output_layout.addOutput(layout_output, scene_output);
 
+        // 3. Create background
+        var box: wlr.Box = undefined;
+        server.output_layout.getBox(wlr_output, &box);
+        output.background = server.bg_tree.createSceneRect(box.width, box.height, &server.bg_color) catch null;
+        if (output.background) |bg| {
+            bg.node.setPosition(box.x, box.y);
+            bg.node.setEnabled(true);
+            std.log.info("Background created for {s} at ({d}, {d}) {d}x{d} (parent=bg_tree)", .{wlr_output.name, box.x, box.y, box.width, box.height});
+        }
+
         return output;
     }
 
@@ -50,6 +61,13 @@ pub const Output = struct {
             _ = output.wlr_output.commitState(&state);
             return;
         };
+
+        if (output.background) |bg| {
+            var box: wlr.Box = undefined;
+            output.server.output_layout.getBox(output.wlr_output, &box);
+            bg.setSize(box.width, box.height);
+            bg.node.setPosition(box.x, box.y);
+        }
 
         if (!scene_output.commit(null)) {
             std.log.err("scene_output.commit failed on {s}", .{output.wlr_output.name});
@@ -67,6 +85,15 @@ pub const Output = struct {
         const output: *Output = @fieldParentPtr("request_state", listener);
         _ = output.wlr_output.commitState(event.state);
         output.server.updateLayout();
+
+        // Update background size
+        var box: wlr.Box = undefined;
+        output.server.output_layout.getBox(output.wlr_output, &box);
+        if (output.background) |bg| {
+            bg.setSize(box.width, box.height);
+            bg.node.setPosition(box.x, box.y);
+            std.log.info("Background resized for {s} to {d}x{d} at ({d}, {d})", .{output.wlr_output.name, box.width, box.height, box.x, box.y});
+        }
     }
 
     fn handleDestroy(listener: *wl.Listener(*wlr.Output), _: *wlr.Output) void {
