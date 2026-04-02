@@ -67,11 +67,30 @@ pub const TilingNode = struct {
     pub fn arrange(self: *TilingNode, box: wlr.Box) void {
         if (self.view) |v| {
             if (v.mapped) {
-                _ = wlr.XdgToplevel.setSize(v.xdg_toplevel, box.width, box.height);
+                var width = box.width;
+                var height = box.height;
+
+                const min_w = v.xdg_toplevel.current.min_width;
+                const min_h = v.xdg_toplevel.current.min_height;
+                const max_w = v.xdg_toplevel.current.max_width;
+                const max_h = v.xdg_toplevel.current.max_height;
+
+                if (min_w > 0) width = @max(width, min_w);
+                if (max_w > 0) width = @min(width, max_w);
+                if (min_h > 0) height = @max(height, min_h);
+                if (max_h > 0) height = @min(height, max_h);
+
+                if (v.xdg_toplevel.current.width != width or v.xdg_toplevel.current.height != height) {
+                    _ = wlr.XdgToplevel.setSize(v.xdg_toplevel, width, height);
+                }
+
+                const offset_x = @divTrunc(box.width - width, 2);
+                const offset_y = @divTrunc(box.height - height, 2);
+
+                v.scene_tree.node.setPosition(box.x + offset_x, box.y + offset_y);
+                v.x = box.x + offset_x;
+                v.y = box.y + offset_y;
             }
-            v.scene_tree.node.setPosition(box.x, box.y);
-            v.x = box.x;
-            v.y = box.y;
             return;
         }
 

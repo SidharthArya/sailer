@@ -15,20 +15,38 @@ pub const Ribbon = struct {
                 continue;
             }
 
-            const width: i32 = @divTrunc(box.width * view.width_percent, 100);
-            const height: i32 = box.height;
+            const target_width: i32 = @divTrunc(box.width * view.width_percent, 100);
+            const target_height: i32 = box.height;
+
+            var width = target_width;
+            var height = target_height;
+
+            const min_w = view.xdg_toplevel.current.min_width;
+            const min_h = view.xdg_toplevel.current.min_height;
+            const max_w = view.xdg_toplevel.current.max_width;
+            const max_h = view.xdg_toplevel.current.max_height;
+
+            if (min_w > 0) width = @max(width, min_w);
+            if (max_w > 0) width = @min(width, max_w);
+            if (min_h > 0) height = @max(height, min_h);
+            if (max_h > 0) height = @min(height, max_h);
 
             // Smart Resize: Only send configure if target dimensions actually changed.
             if (view.xdg_toplevel.current.width != width or view.xdg_toplevel.current.height != height) {
                 _ = wlr.XdgToplevel.setSize(view.xdg_toplevel, width, height);
             }
-            view.scene_tree.node.setPosition(current_x, 0);
-            std.log.debug("Ribbon arrange: {s} -> {d},0 (size {d}x{d})", .{ @as([*:0]const u8, @ptrCast(view.xdg_toplevel.title orelse "unnamed")), current_x, width, height });
 
-            view.x = current_x;
-            view.y = 0;
+            // Center within its logical slot if it's smaller than its allocated width
+            const offset_x = @divTrunc(target_width - width, 2);
+            const offset_y = @divTrunc(target_height - height, 2);
 
-            current_x += width + 20; // 20px gap
+            view.scene_tree.node.setPosition(current_x + offset_x, offset_y);
+            std.log.debug("Ribbon arrange: {s} -> {d},{d} (size {d}x{d})", .{ @as([*:0]const u8, @ptrCast(view.xdg_toplevel.title orelse "unnamed")), current_x + offset_x, offset_y, width, height });
+
+            view.x = current_x + offset_x;
+            view.y = offset_y;
+
+            current_x += target_width + 20; // 20px gap
         }
 
         self.clampScroll(ws, box);
