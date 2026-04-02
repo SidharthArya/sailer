@@ -4,7 +4,7 @@ const View = @import("../View.zig");
 const Workspace = @import("../Workspace.zig").Workspace;
 
 pub const Ribbon = struct {
-    pub fn arrange(_: *Ribbon, ws: *Workspace, box: wlr.Box) void {
+    pub fn arrange(self: *Ribbon, ws: *Workspace, box: wlr.Box) void {
         var current_x: i32 = 0;
 
         // Ribbon order (Left-to-Right): Tail (prev) -> Head (next)
@@ -30,6 +30,8 @@ pub const Ribbon = struct {
 
             current_x += width + 20; // 20px gap
         }
+
+        self.clampScroll(ws, box);
 
         // Apply scroll offset and output position
         if (ws.server.display_mode == .discrete) {
@@ -58,13 +60,13 @@ pub const Ribbon = struct {
             total_width += width + 20;
         }
 
-        const min_scroll = box.width - total_width;
-        if (total_width > box.width) {
-            if (ws.scroll_offset_x < min_scroll) {
-                ws.scroll_offset_x = min_scroll;
-            }
-        } else {
-            ws.scroll_offset_x = 0;
+        const max_scroll = @max(0, box.width - total_width);
+        const min_scroll = if (total_width > box.width) box.width - total_width else 0;
+
+        if (ws.scroll_offset_x < min_scroll) {
+            ws.scroll_offset_x = min_scroll;
+        } else if (ws.scroll_offset_x > max_scroll) {
+            ws.scroll_offset_x = max_scroll;
         }
     }
 

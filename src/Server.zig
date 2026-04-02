@@ -507,7 +507,7 @@ pub const Server = struct {
                 var box: wlr.Box = undefined;
                 s.output_layout.getBox(output.wlr_output, &box);
                 const view_width = @divTrunc(box.width * toplevel.width_percent, 100);
-                ws.scroll_offset_x = toplevel.x - @divTrunc(box.width - view_width, 2);
+                ws.scroll_offset_x = @as(i32, @divTrunc(box.width - view_width, 2)) - toplevel.x;
             }
         } else {
             // Spanned or Mirror: use monitor where cursor is
@@ -524,7 +524,7 @@ pub const Server = struct {
                 s.output_layout.getBox(o, &box);
                 const view_width = @divTrunc(box.width * toplevel.width_percent, 100);
                 // Snap to this monitor's coordinates within the workspace
-                ws.scroll_offset_x = toplevel.x - (box.x + @divTrunc(box.width - view_width, 2));
+                ws.scroll_offset_x = @as(i32, @divTrunc(box.width - view_width, 2)) - (toplevel.x - box.x);
             }
         }
         ws.arrange();
