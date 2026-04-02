@@ -8,7 +8,7 @@ pub fn main() anyerror!void {
     wlr.log.init(.debug, null);
 
     var server: Server = undefined;
-    std.log.info("info(sailer): Sailer Version 0.1.0-v8.1 (Comprehensive Fix)", .{});
+    std.log.info("info(sailer): Sailer Version 0.1.0-v8.2 (Stability & Performance Fix)", .{});
     try server.init();
     defer server.deinit();
 

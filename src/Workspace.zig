@@ -36,14 +36,20 @@ pub const Workspace = struct {
     }
 
     pub fn arrange(self: *Workspace) void {
-        var box: wlr.Box = undefined;
+        var box: wlr.Box = .{ .x = 0, .y = 0, .width = 0, .height = 0 };
         if (self.server.display_mode == .spanned) {
             self.server.output_layout.getBox(null, &box);
         } else if (self.visible_on) |output| {
             self.server.output_layout.getBox(output.wlr_output, &box);
         } else return;
 
-        self.layout.arrange(self, box);
+        if (box.width <= 0 or box.height <= 0) return;
+
+        var layout_box = box;
+        layout_box.y += self.server.bar_height;
+        layout_box.height -= self.server.bar_height;
+
+        self.layout.arrange(self, layout_box);
     }
 
 

@@ -17,8 +17,8 @@ pub const Ribbon = struct {
             }
             view.scene_tree.node.setEnabled(true);
 
-            const target_width: i32 = @divTrunc(box.width * view.width_percent, 100);
-            const target_height: i32 = box.height;
+            const target_width: i32 = if (box.width > 0) @divTrunc(box.width * view.width_percent, 100) else 100;
+            const target_height: i32 = @max(1, box.height);
 
             var width = target_width;
             var height = target_height;
@@ -36,6 +36,11 @@ pub const Ribbon = struct {
             const bw = view.border_width;
             const xdg_w = @max(1, width - 2 * bw);
             const xdg_h = @max(1, height - 2 * bw);
+
+            if (xdg_w > 10000 or xdg_h > 10000) {
+                std.log.err("Refusing to resize view to extreme dimensions: {d}x{d}", .{xdg_w, xdg_h});
+                continue;
+            }
 
             // Smart Resize: Only send configure if target dimensions actually changed.
             if (view.xdg_toplevel.current.width != xdg_w or view.xdg_toplevel.current.height != xdg_h) {

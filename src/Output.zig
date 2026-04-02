@@ -3,6 +3,7 @@ const posix = std.posix;
 const wl = @import("wayland").server.wl;
 const wlr = @import("wlroots");
 const Server = @import("Server.zig").Server;
+const Bar = @import("Bar.zig").Bar;
 
 pub const Output = struct {
     server: *Server,
@@ -13,6 +14,7 @@ pub const Output = struct {
     request_state: wl.Listener(*wlr.Output.event.RequestState) = .init(Output.handleRequestState),
     destroy: wl.Listener(*wlr.Output) = .init(Output.handleDestroy),
     background: ?*wlr.SceneRect = null,
+    bar: ?*Bar = null,
 
     pub fn create(server: *Server, wlr_output: *wlr.Output) !*Output {
         const output = try std.heap.c_allocator.create(Output);
@@ -49,6 +51,12 @@ pub const Output = struct {
             std.log.info("Background created for {s} at ({d}, {d}) {d}x{d} (parent=bg_tree)", .{wlr_output.name, box.x, box.y, box.width, box.height});
         }
 
+        // 4. Create status bar
+        output.bar = Bar.create(server, output) catch |err| blk: {
+            std.log.err("Failed to create status bar for {s}: {}", .{wlr_output.name, err});
+            break :blk null;
+        };
+
         return output;
     }
 
@@ -68,6 +76,8 @@ pub const Output = struct {
             bg.setSize(box.width, box.height);
             bg.node.setPosition(box.x, box.y);
         }
+
+//        if (output.bar) |bar| bar.update();
 
         if (!scene_output.commit(null)) {
             std.log.err("scene_output.commit failed on {s}", .{output.wlr_output.name});
@@ -112,6 +122,7 @@ pub const Output = struct {
         }
 
         if (output.background) |bg| bg.node.destroy();
+        if (output.bar) |bar| bar.deinit();
         std.heap.c_allocator.destroy(output);
     }
 };

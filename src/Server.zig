@@ -22,8 +22,13 @@ pub const KeyMatch = struct {
 pub const MatchResult = enum { none, partial, full };
 
 fn handleSequenceTimeout(server: *Server) c_int {
-    std.log.debug("Sequence timeout fired, clearing.", .{});
     server.current_sequence.clearRetainingCapacity();
+    return 0;
+}
+
+fn handleBarTimer(server: *Server) c_int {
+    server.refreshBars();
+    server.bar_timer.timerUpdate(10000) catch {}; // Every 10 seconds
     return 0;
 }
 
@@ -38,6 +43,7 @@ pub const Server = struct {
     output_layout: *wlr.OutputLayout,
     scene_output_layout: *wlr.SceneOutputLayout,
     bg_tree: *wlr.SceneTree,
+    shm: *wlr.Shm,
     new_output: wl.Listener(*wlr.Output) = .init(Server.newOutput),
 
     xdg_shell: *wlr.XdgShell,
@@ -71,6 +77,7 @@ pub const Server = struct {
 
     current_sequence: std.ArrayListUnmanaged(KeyMatch) = .{},
     sequence_timer: *wl.EventSource = undefined,
+    bar_timer: *wl.EventSource = undefined,
 
     // For modifier tap detection
     last_mod_tap_ready: bool = false,
@@ -85,6 +92,7 @@ pub const Server = struct {
     resize_edges: wlr.Edges = .{},
     socket_name: []const u8 = "",
     socket_name_buf: [11]u8 = undefined,
+    bar_height: i32 = 24,
     // mcp: ?*McpServer = null,
 
     pub fn init(server: *Server) !void {
@@ -155,10 +163,14 @@ pub const Server = struct {
         server.sequence_timer = try loop.addTimer(*Server, handleSequenceTimeout, server);
         server.sequence_timer.timerUpdate(0) catch {};
 
+        server.bar_timer = try loop.addTimer(*Server, handleBarTimer, server);
+        server.bar_timer.timerUpdate(1000) catch {}; // First update in 1s
+
         try server.renderer.initServer(wl_server);
         _ = try wlr.Compositor.create(server.wl_server, 6, server.renderer);
         _ = try wlr.Subcompositor.create(server.wl_server);
         _ = try wlr.DataDeviceManager.create(server.wl_server);
+        server.shm = try wlr.Shm.createWithRenderer(server.wl_server, 1, server.renderer);
         _ = try wlr.ScreencopyManagerV1.create(server.wl_server);
         _ = try wlr.XdgOutputManagerV1.create(server.wl_server, server.output_layout);
 
@@ -315,6 +327,15 @@ pub const Server = struct {
             } else {
                 ws.scene_tree.node.setEnabled(false);
             }
+        }
+        server.refreshBars();
+    }
+
+    pub fn refreshBars(server: *Server) void {
+        var it = server.outputs.link.next;
+        while (it != &server.outputs.link) : (it = it.?.next) {
+            const out: *Output = @fieldParentPtr("link", it.?);
+            if (out.bar) |bar| bar.update();
         }
     }
 
@@ -556,6 +577,7 @@ pub const Server = struct {
             }
         }
         ws.arrange();
+        server.refreshBars();
     }
 
     fn newInput(listener: *wl.Listener(*wlr.InputDevice), device: *wlr.InputDevice) void {
@@ -618,8 +640,15 @@ pub const Server = struct {
                 wlr.Seat.pointerNotifyEnter(server.seat, res.surface, res.sx, res.sy);
                 wlr.Seat.pointerNotifyMotion(server.seat, time_msec, res.sx, res.sy);
             } else {
-                server.cursor.setXcursor(server.cursor_mgr, "default");
-                wlr.Seat.pointerClearFocus(server.seat);
+                var sx: f64 = undefined;
+                var sy: f64 = undefined;
+                const node = server.scene.tree.node.at(server.cursor.x, server.cursor.y, &sx, &sy);
+                
+                // Only clear focus if we hit nothing (outside all outputs) or the background (rect)
+                if (node == null or node.?.type == .rect) {
+                    server.cursor.setXcursor(server.cursor_mgr, "default");
+                    wlr.Seat.pointerClearFocus(server.seat);
+                }
             },
             .move => {
                 const toplevel = server.grabbed_view.?;
