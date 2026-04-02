@@ -696,6 +696,20 @@ pub const Server = struct {
             target_ws.setVisible(output);
         }
 
+        // Move sticky windows from current to target
+        var it = current_ws.views.link.next;
+        while (it != &current_ws.views.link) {
+            const next = it.?.next;
+            const toplevel: *Toplevel = @fieldParentPtr("link", it.?);
+            if (toplevel.sticky) {
+                toplevel.link.remove();
+                target_ws.views.prepend(toplevel);
+                toplevel.workspace = target_ws;
+                toplevel.scene_tree.node.reparent(target_ws.scene_tree);
+            }
+            it = next;
+        }
+
         server.focused_workspace = target_ws;
         server.updateLayout();
 
@@ -795,6 +809,22 @@ pub const Server = struct {
                 var cmd_buf: [512]u8 = undefined;
                 const cmd = std.fmt.bufPrint(&cmd_buf, "mkdir -p ~/Pictures/screenshots && grim ~/Pictures/screenshots/sa_screenshot_{d}.png", .{timestamp}) catch "grim";
                 server.spawn(cmd);
+            },
+            .toggle_locked, .toggle_sticky, .toggle_private, .toggle_marked, .toggle_hidden, .toggle_urgent => if (server.seat.keyboard_state.focused_surface) |surface| {
+                if (wlr.XdgSurface.tryFromWlrSurface(surface)) |xdg_surface| {
+                    if (View.fromXdgSurface(xdg_surface)) |t| {
+                        switch (action) {
+                            .toggle_locked => t.locked = !t.locked,
+                            .toggle_sticky => t.sticky = !t.sticky,
+                            .toggle_private => t.private = !t.private,
+                            .toggle_marked => t.marked = !t.marked,
+                            .toggle_hidden => t.hidden = !t.hidden,
+                            .toggle_urgent => t.urgent = !t.urgent,
+                            else => unreachable,
+                        }
+                        t.workspace.arrange();
+                    }
+                }
             },
         }
     }

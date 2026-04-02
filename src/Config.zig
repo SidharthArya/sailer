@@ -18,6 +18,12 @@ pub const Action = enum {
     cycle_display_mode,
     focus_output,
     screenshot,
+    toggle_locked,
+    toggle_sticky,
+    toggle_private,
+    toggle_marked,
+    toggle_hidden,
+    toggle_urgent,
 };
 
 pub const DisplayMode = enum {

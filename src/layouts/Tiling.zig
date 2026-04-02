@@ -66,7 +66,8 @@ pub const TilingNode = struct {
 
     pub fn arrange(self: *TilingNode, box: wlr.Box) void {
         if (self.view) |v| {
-            if (v.mapped) {
+            if (v.mapped and !v.hidden) {
+                v.scene_tree.node.setEnabled(true);
                 var width = box.width;
                 var height = box.height;
 
@@ -90,6 +91,8 @@ pub const TilingNode = struct {
                 v.scene_tree.node.setPosition(box.x + offset_x, box.y + offset_y);
                 v.x = box.x + offset_x;
                 v.y = box.y + offset_y;
+            } else {
+                v.scene_tree.node.setEnabled(false);
             }
             return;
         }

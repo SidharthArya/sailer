@@ -14,6 +14,12 @@ pub const Toplevel = struct {
     y: i32 = 0,
     width_percent: i32 = 70,
     mapped: bool = false,
+    locked: bool = false,
+    sticky: bool = false,
+    private: bool = false,
+    marked: bool = false,
+    hidden: bool = false,
+    urgent: bool = false,
 
     commit: wl.Listener(*wlr.Surface) = .init(Toplevel.handleCommit),
     map: wl.Listener(void) = .init(Toplevel.handleMap),
@@ -78,6 +84,7 @@ pub const Toplevel = struct {
         _: *wlr.XdgToplevel.event.Move,
     ) void {
         const toplevel: *Toplevel = @fieldParentPtr("request_move", listener);
+        if (toplevel.locked) return;
         const server = toplevel.server;
         server.grabbed_view = toplevel;
         server.cursor_mode = .move;
@@ -90,6 +97,7 @@ pub const Toplevel = struct {
         event: *wlr.XdgToplevel.event.Resize,
     ) void {
         const toplevel: *Toplevel = @fieldParentPtr("request_resize", listener);
+        if (toplevel.locked) return;
         const server = toplevel.server;
 
         server.grabbed_view = toplevel;

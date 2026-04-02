@@ -11,9 +11,11 @@ pub const Ribbon = struct {
         var it = ws.views.link.prev;
         while (it != &ws.views.link) : (it = it.?.prev) {
             const view: *View.Toplevel = @fieldParentPtr("link", it.?);
-            if (!view.mapped) {
+            if (!view.mapped or view.hidden) {
+                if (view.hidden) view.scene_tree.node.setEnabled(false);
                 continue;
             }
+            view.scene_tree.node.setEnabled(true);
 
             const target_width: i32 = @divTrunc(box.width * view.width_percent, 100);
             const target_height: i32 = box.height;
