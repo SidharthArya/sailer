@@ -111,6 +111,7 @@ pub const Output = struct {
             if (ws.visible_on == output) ws.visible_on = null;
         }
 
+        if (output.background) |bg| bg.node.destroy();
         std.heap.c_allocator.destroy(output);
     }
 };

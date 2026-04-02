@@ -109,6 +109,7 @@ pub const Toplevel = struct {
         }
 
         toplevel.link.remove();
+        toplevel.scene_tree.node.setEnabled(false);
         toplevel.workspace.arrange();
     }
 
@@ -122,6 +123,7 @@ pub const Toplevel = struct {
         toplevel.request_move.link.remove();
         toplevel.request_resize.link.remove();
 
+        toplevel.scene_tree.node.destroy();
         std.heap.c_allocator.destroy(toplevel);
     }
 
@@ -165,6 +167,7 @@ pub const Toplevel = struct {
 
 pub const Popup = struct {
     xdg_popup: *wlr.XdgPopup,
+    scene_tree: *wlr.SceneTree,
 
     commit: wl.Listener(*wlr.Surface) = .init(Popup.handleCommit),
     destroy: wl.Listener(void) = .init(Popup.handleDestroy),
@@ -182,6 +185,7 @@ pub const Popup = struct {
         popup.commit.link.remove();
         popup.destroy.link.remove();
 
+        popup.scene_tree.node.destroy();
         std.heap.c_allocator.destroy(popup);
     }
 };

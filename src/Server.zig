@@ -451,6 +451,7 @@ pub const Server = struct {
         };
         popup.* = .{
             .xdg_popup = xdg_popup,
+            .scene_tree = scene_tree,
         };
 
         xdg_surface.surface.events.commit.add(&popup.commit);
