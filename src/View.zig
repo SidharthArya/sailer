@@ -48,10 +48,10 @@ pub const Toplevel = struct {
 
         const ws = toplevel.workspace;
         toplevel.mapped = false;
-        if (ws.layout_mode == .tiling) {
-            if (ws.tiling_root) |root| {
+        if (ws.layout == .tiling) {
+            if (ws.layout.tiling.root) |root| {
                 if (root.findNodeForView(toplevel)) |node| {
-                    node.remove(std.heap.c_allocator, &ws.tiling_root);
+                    node.remove(std.heap.c_allocator, &ws.layout.tiling.root);
                 }
             }
         }

@@ -1,14 +1,14 @@
 const std = @import("std");
 const wlr = @import("wlroots");
-const View = @import("View.zig");
-const Toplevel = View.Toplevel;
+const View = @import("../View.zig");
+const Workspace = @import("../Workspace.zig").Workspace;
 
 pub const SplitType = enum { horizontal, vertical };
 
 pub const TilingNode = struct {
     split_type: ?SplitType = null,
     ratio: f32 = 0.5,
-    view: ?*Toplevel = null,
+    view: ?*View.Toplevel = null,
     parent: ?*TilingNode = null,
     children: [2]?*TilingNode = .{ null, null },
 
@@ -41,7 +41,7 @@ pub const TilingNode = struct {
         allocator.destroy(self);
     }
 
-    pub fn createLeaf(allocator: std.mem.Allocator, view: *Toplevel) !*TilingNode {
+    pub fn createLeaf(allocator: std.mem.Allocator, view: *View.Toplevel) !*TilingNode {
         const node = try allocator.create(TilingNode);
         node.* = .{
             .view = view,
@@ -49,7 +49,7 @@ pub const TilingNode = struct {
         return node;
     }
 
-    pub fn split(self: *TilingNode, allocator: std.mem.Allocator, new_view: *Toplevel) !void {
+    pub fn split(self: *TilingNode, allocator: std.mem.Allocator, new_view: *View.Toplevel) !void {
         if (self.view == null) return; // Already a split node
 
         const old_view = self.view.?;
@@ -67,7 +67,7 @@ pub const TilingNode = struct {
     pub fn arrange(self: *TilingNode, box: wlr.Box) void {
         if (self.view) |v| {
             if (v.mapped) {
-                _ = v.xdg_toplevel.setSize(box.width, box.height);
+                _ = wlr.XdgToplevel.setSize(v.xdg_toplevel, box.width, box.height);
             }
             v.scene_tree.node.setPosition(box.x, box.y);
             v.x = box.x;
@@ -98,10 +98,30 @@ pub const TilingNode = struct {
         }
     }
 
-    pub fn findNodeForView(self: *TilingNode, view: *Toplevel) ?*TilingNode {
+    pub fn findNodeForView(self: *TilingNode, view: *View.Toplevel) ?*TilingNode {
         if (self.view == view) return self;
         if (self.children[0]) |c| if (c.findNodeForView(view)) |n| return n;
         if (self.children[1]) |c| if (c.findNodeForView(view)) |n| return n;
         return null;
+    }
+};
+
+pub const Tiling = struct {
+    root: ?*TilingNode = null,
+
+    pub fn arrange(self: *Tiling, ws: *Workspace, box: wlr.Box) void {
+        if (self.root) |root| {
+            root.arrange(box);
+        }
+
+        if (ws.server.display_mode == .discrete) {
+            if (ws.visible_on) |output| {
+                if (ws.server.output_layout.get(output.wlr_output)) |l_output| {
+                    ws.scene_tree.node.setPosition(l_output.x, l_output.y);
+                }
+            }
+        } else {
+            ws.scene_tree.node.setPosition(0, 0);
+        }
     }
 };

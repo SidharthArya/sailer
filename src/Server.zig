@@ -11,7 +11,9 @@ const KeyboardDevice = @import("Keyboard.zig").KeyboardDevice;
 const Workspace = @import("Workspace.zig").Workspace;
 const Config = @import("Config.zig").Config;
 const Keybinding = @import("Config.zig").Keybinding;
-const McpServer = @import("Mcp.zig").McpServer;
+const layouts = @import("layouts/index.zig");
+const Tiling = @import("layouts/Tiling.zig").Tiling;
+const TilingNode = @import("layouts/Tiling.zig").TilingNode;
 
 pub const KeyMatch = struct {
     sym: xkb.Keysym,
@@ -81,7 +83,7 @@ pub const Server = struct {
     resize_edges: wlr.Edges = .{},
     socket_name: []const u8 = "",
     socket_name_buf: [11]u8 = undefined,
-    mcp: ?*McpServer = null,
+    // mcp: ?*McpServer = null,
 
     pub fn init(server: *Server) !void {
         // Initialize listeners and fields with defaults explicitly to avoid garbage
@@ -172,12 +174,11 @@ pub const Server = struct {
         server.socket_name = try wl_server.addSocketAuto(&server.socket_name_buf);
         std.log.info("Running compositor on WAYLAND_DISPLAY={s}", .{server.socket_name});
 
-        server.mcp = McpServer.init(server, std.heap.c_allocator) catch |err| blk: {
-            std.log.err("failed to initialize MCP server: {}", .{err});
-            break :blk null;
-        };
+        // server.mcp = McpServer.init(server, std.heap.c_allocator) catch |err| blk: {
+        //     std.log.err("failed to initialize MCP server: {}", .{err});
+        //     break :blk null;
+        // };
     }
-
 
     pub fn warpCursorToOutput(server: *Server, wlr_output: *wlr.Output) void {
         var box: wlr.Box = undefined;
@@ -390,14 +391,13 @@ pub const Server = struct {
         // Add to workspace list immediately so link is valid for remove() later
         ws.views.prepend(toplevel);
 
-        if (ws.layout_mode == .tiling) {
-            const TilingNode = @import("Tiling.zig").TilingNode;
-            if (ws.tiling_root) |root| {
+        if (ws.layout == .tiling) {
+            if (ws.layout.tiling.root) |root| {
                 root.split(std.heap.c_allocator, toplevel) catch |err| {
                     std.log.err("failed to split tiling node: {}", .{err});
                 };
             } else {
-                ws.tiling_root = TilingNode.createLeaf(std.heap.c_allocator, toplevel) catch null;
+                ws.layout.tiling.root = TilingNode.createLeaf(std.heap.c_allocator, toplevel) catch null;
             }
         }
 
@@ -714,25 +714,26 @@ pub const Server = struct {
         switch (action) {
             .toggle_layout => {
                 const ws = server.focused_workspace;
-                ws.layout_mode = if (ws.layout_mode == .ribbon) .tiling else .ribbon;
-                // If switching to tiling, we might need to initialize the tree from existing views
-                if (ws.layout_mode == .tiling and ws.tiling_root == null) {
-                    const TilingNode = @import("Tiling.zig").TilingNode;
+                if (ws.layout == .ribbon) {
+                    var tiling = Tiling{};
                     var it = ws.views.link.prev;
                     while (it != &ws.views.link) : (it = it.?.prev) {
                         const view: *Toplevel = @fieldParentPtr("link", it.?);
-                        if (ws.tiling_root) |root| {
+                        if (tiling.root) |root| {
                             root.split(std.heap.c_allocator, view) catch {};
                         } else {
-                            ws.tiling_root = TilingNode.createLeaf(std.heap.c_allocator, view) catch null;
+                            tiling.root = TilingNode.createLeaf(std.heap.c_allocator, view) catch null;
                         }
                     }
+                    ws.layout = .{ .tiling = tiling };
+                } else {
+                    ws.layout = .{ .ribbon = .{} };
                 }
                 ws.arrange();
             },
             .smart_view => {
                 const ws = server.focused_workspace;
-                ws.layout_mode = if (ws.layout_mode == .smart_view) .ribbon else .smart_view;
+                ws.layout = if (ws.layout == .smart_view) .{ .ribbon = .{} } else .{ .smart_view = .{} };
                 ws.arrange();
             },
             .terminate => {
