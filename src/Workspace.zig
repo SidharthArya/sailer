@@ -43,7 +43,8 @@ pub const Workspace = struct {
             self.server.output_layout.getBox(output.wlr_output, &box);
         } else return;
 
-        if (box.width <= 0 or box.height <= 0) return;
+        // Skip arrangement if dimensions are garbage (e.g. from uninitialized output layout)
+        if (box.width <= 0 or box.height <= 24 or box.height > 10000) return;
 
         var layout_box = box;
         layout_box.y += self.server.bar_height;

@@ -7,8 +7,6 @@ const Screenshot = @import("Screenshot.zig").Screenshot;
 
 pub const McpServer = struct {
     server: *Server,
-pub const McpServer = struct {
-    server: *Server,
     allocator: std.mem.Allocator,
 
     pub fn init(server: *Server, allocator: std.mem.Allocator) !*McpServer {
@@ -22,7 +20,6 @@ pub const McpServer = struct {
 
     pub fn handleClient(self: *McpServer, stream: std.net.Stream) !void {
         var reader_buf: [16384]u8 = undefined;
-        var writer_buf: [16384]u8 = undefined;
         var br = std.io.bufferedReader(stream.reader());
         var bw = std.io.bufferedWriter(stream.writer());
         const reader = br.reader();
@@ -175,7 +172,9 @@ pub const McpServer = struct {
                 var it = self.server.outputs.link.next;
                 while (it != &self.server.outputs.link) : (it = it.?.next) {
                     const output: *@import("Output.zig").Output = @fieldParentPtr("link", it.?);
-                    const bmp_data = Screenshot.captureOutput(self.allocator, self.server.renderer, output.wlr_output) catch |err| {
+                    const scene_output = self.server.scene.getSceneOutput(output.wlr_output) orelse continue;
+                    
+                    const bmp_data = Screenshot.captureOutput(self.allocator, scene_output) catch |err| {
                         std.log.err("mcp: failed to capture screenshot for {s}: {}", .{ output.wlr_output.name, err });
                         continue;
                     };
@@ -205,5 +204,4 @@ pub const McpServer = struct {
         }
         try writer.print("\"result\":{f}}}\n", .{std.json.fmt(result, .{})});
     }
-};
 };

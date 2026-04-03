@@ -5,13 +5,18 @@ const Server = @import("Server.zig").Server;
 const Output = @import("Output.zig").Output;
 
 const c = @cImport({
+    @cDefine("WLR_USE_UNSTABLE", "1");
     @cInclude("ft2build.h");
     @cInclude("freetype/freetype.h");
     @cInclude("pixman.h");
     @cInclude("wlr/types/wlr_shm.h");
     @cInclude("wlr/types/wlr_scene.h");
     @cInclude("wlr/types/wlr_buffer.h");
+    @cInclude("wlr/interfaces/wlr_buffer.h");
 });
+
+const Shm = @import("Shm.zig");
+
 
 pub const Bar = struct {
     server: *Server,
@@ -46,15 +51,9 @@ pub const Bar = struct {
         const width = box.width;
         const height = 24;
 
-        // Use the server's allocator to create a buffer
-        var modifiers = [_]u64{0}; // DRM_FORMAT_MOD_LINEAR
-        var drm_format = wlr.DrmFormat{
-            .format = 0x34325258, // XRGB8888
-            .len = 1,
-            .capacity = 1,
-            .modifiers = &modifiers,
-        };
-        const wlr_buffer = server.allocator.createBuffer(width, height, &drm_format) orelse return error.BufferCreateFailed;
+        // Use a manual SHM buffer to guarantee CPU access
+        const shm_buf = try Shm.ShmBuffer.create(width, height, 0x34325258); // XRGB8888
+        const wlr_buffer = shm_buf.getWlrBuffer();
         
         const scene_tree = server.scene.tree.createSceneTree() catch return error.SceneTreeCreateFailed;
         const scene_buffer = try scene_tree.createSceneBuffer(wlr_buffer);
@@ -82,12 +81,12 @@ pub const Bar = struct {
         var data_ptr: *anyopaque = undefined;
         var out_format: u32 = 0;
         var stride: usize = 0;
+        // Using SHM buffer guarantees beginDataPtrAccess will work
         if (!self.wlr_buffer.beginDataPtrAccess(3, &data_ptr, &out_format, &stride)) {
              std.log.err("Failed to map status bar buffer for CPU access", .{});
              return;
         }
-        defer self.wlr_buffer.endDataPtrAccess();
-
+        
         const pixels = @as([*]u32, @ptrCast(@alignCast(data_ptr)));
 
         const pix = c.pixman_image_create_bits(
@@ -150,6 +149,8 @@ pub const Bar = struct {
         const time_str = std.fmt.bufPrint(&time_buf, "{d:0>2}:{d:0>2} UTC", .{hours, minutes}) catch "00:00";
         self.drawText(pixels, time_str, self.width - 100, 18, .{ .red = 0xFFFF, .green = 0xFFFF, .blue = 0x7FFF, .alpha = 0xFFFF });
         
+        self.wlr_buffer.endDataPtrAccess();
+
         // Damage the buffer node to trigger a redraw
         self.scene_buffer.setBuffer(self.wlr_buffer);
     }
