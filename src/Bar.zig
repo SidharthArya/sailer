@@ -10,6 +10,8 @@ const Shm = @import("Shm.zig");
 const bar_workspaces = @import("bar/Workspaces.zig");
 const Workspaces = bar_workspaces.Workspaces;
 const Theme = @import("bar/Theme.zig").Theme;
+const bar_clock = @import("bar/Clock.zig");
+const Clock = bar_clock.Clock;
 
 pub const Bar = struct {
     server: *Server,
@@ -109,13 +111,7 @@ pub const Bar = struct {
         );
 
         // Clock (Blue)
-        const now = std.time.timestamp();
-        var time_buf: [32]u8 = undefined;
-        const day_seconds = @mod(now, 86400);
-        const hours = @divTrunc(day_seconds, 3600);
-        const minutes = @divTrunc(@mod(day_seconds, 3600), 60);
-        const time_str = std.fmt.bufPrint(&time_buf, "{d:0>2}:{d:0>2} UTC", .{ hours, minutes }) catch "00:00";
-        self.drawText(pixels, time_str, self.width - 110, 17, Theme.blue);
+        Clock.render(self, pixels);
 
         self.wlr_buffer.endDataPtrAccess();
 
