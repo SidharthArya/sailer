@@ -100,6 +100,7 @@ pub const Server = struct {
     grab_x: f64 = 0,
     grab_y: f64 = 0,
     grab_box: wlr.Box = undefined,
+    grab_percent: i32 = 50,
     resize_edges: wlr.Edges = .{},
     socket_name: []const u8 = "",
     socket_name_buf: [11]u8 = undefined,
@@ -716,6 +717,22 @@ pub const Server = struct {
             },
             .resize => {
                 const toplevel = server.grabbed_view.?;
+                if (server.focused_workspace.layout != .floating) {
+                    const box = server.focused_workspace.getUsableArea();
+                    if (box.width > 0) {
+                        const delta_x = if (server.resize_edges.right)
+                            server.cursor.x - (@as(f64, @floatFromInt(server.grab_box.x + server.grab_box.width)) + server.grab_x)
+                        else if (server.resize_edges.left)
+                            (@as(f64, @floatFromInt(server.grab_box.x)) + server.grab_x) - server.cursor.x
+                        else 0;
+
+                        const percent_delta = @as(i32, @intFromFloat((delta_x / @as(f64, @floatFromInt(box.width))) * 100.0));
+                        toplevel.width_percent = @max(10, @min(100, server.grab_percent + percent_delta));
+                        server.focused_workspace.arrange();
+                    }
+                    return;
+                }
+
                 const border_x = @as(i32, @intFromFloat(server.cursor.x - server.grab_x));
                 const border_y = @as(i32, @intFromFloat(server.cursor.y - server.grab_y));
 
@@ -747,6 +764,7 @@ pub const Server = struct {
                 const new_width = new_right - new_left;
                 const new_height = new_bottom - new_top;
                 _ = toplevel.xdg_toplevel.setSize(new_width, new_height);
+                toplevel.updateLayout(new_width, new_height);
             },
         }
     }
@@ -756,9 +774,8 @@ pub const Server = struct {
         event: *wlr.Pointer.event.Button,
     ) void {
         const server: *Server = @fieldParentPtr("cursor_button", listener);
-        _ = server.seat.pointerNotifyButton(event.time_msec, event.button, event.state);
 
-        // --- NEW: Handle bar workspace clicks FIRST ---
+        // Handle bar workspace clicks FIRST
         if (event.state == .pressed and event.button == 0x110) { // BTN_LEFT
             if (server.output_layout.outputAt(server.cursor.x, server.cursor.y)) |wlr_out| {
                 var it = server.outputs.link.next;
@@ -769,7 +786,7 @@ pub const Server = struct {
                         if (output.bar) |bar| {
                             if (bar.hitTestWorkspace(server.cursor.x, server.cursor.y)) |idx| {
                                 server.switchToWorkspace(@intCast(idx));
-                                return; // 🚨 IMPORTANT: stop normal click handling
+                                return;
                             }
                         }
                         break;
@@ -777,10 +794,75 @@ pub const Server = struct {
                 }
             }
         }
+
+        var is_ctrl = false;
+        if (wlr.Seat.getKeyboard(server.seat)) |kb| {
+            if (wlr.Keyboard.getModifiers(kb).ctrl) is_ctrl = true;
+        }
+
         if (event.state == .released) {
+            if (server.cursor_mode == .move) {
+                if (server.focused_workspace.layout == .ribbon) {
+                    const ws = server.focused_workspace;
+                    const area = ws.getUsableArea();
+                    const drop_x = server.cursor.x - @as(f64, @floatFromInt(area.x + ws.scroll_offset_x));
+
+                    if (server.grabbed_view) |toplevel| {
+                        toplevel.link.remove();
+                        var placed = false;
+                        var it = ws.views.link.prev;
+                        while (it != &ws.views.link) : (it = it.?.prev) {
+                            const view: *View.Toplevel = @fieldParentPtr("link", it.?);
+                            const target_width: i32 = if (area.width > 0) @divTrunc(area.width * view.width_percent, 100) else 100;
+                            const center_x = view.x + @divTrunc(target_width, 2);
+                            
+                            if (drop_x < @as(f64, @floatFromInt(center_x))) {
+                                it.?.insert(&toplevel.link);
+                                placed = true;
+                                break;
+                            }
+                        }
+                        if (!placed) ws.views.link.insert(&toplevel.link);
+                        ws.arrange();
+                    }
+                }
+            }
             server.cursor_mode = .passthrough;
         } else if (server.viewAt(server.cursor.x, server.cursor.y)) |res| {
             server.focusView(res.toplevel, res.surface);
+
+            if (is_ctrl) {
+                server.grabbed_view = res.toplevel;
+                if (event.button == 0x110) { // BTN_LEFT
+                    server.cursor_mode = .move;
+                    server.grab_x = server.cursor.x - @as(f64, @floatFromInt(res.toplevel.x));
+                    server.grab_y = server.cursor.y - @as(f64, @floatFromInt(res.toplevel.y));
+                    return; // Intercept
+                } else if (event.button == 0x111) { // BTN_RIGHT
+                    server.cursor_mode = .resize;
+                    
+                    const box = res.toplevel.xdg_toplevel.base.geometry;
+                    const center_x = @as(f64, @floatFromInt(res.toplevel.x + box.x + @divTrunc(box.width, 2)));
+                    const center_y = @as(f64, @floatFromInt(res.toplevel.y + box.y + @divTrunc(box.height, 2)));
+
+                    server.resize_edges = .{};
+                    if (server.cursor.x < center_x) server.resize_edges.left = true else server.resize_edges.right = true;
+                    if (server.cursor.y < center_y) server.resize_edges.top = true else server.resize_edges.bottom = true;
+
+                    const border_x = res.toplevel.x + box.x + if (server.resize_edges.right) box.width else 0;
+                    const border_y = res.toplevel.y + box.y + if (server.resize_edges.bottom) box.height else 0;
+
+                    server.grab_x = server.cursor.x - @as(f64, @floatFromInt(border_x));
+                    server.grab_y = server.cursor.y - @as(f64, @floatFromInt(border_y));
+
+                    server.grab_box = box;
+                    server.grab_box.x += res.toplevel.x;
+                    server.grab_box.y += res.toplevel.y;
+
+                    server.grab_percent = res.toplevel.width_percent;
+                    return; // Intercept
+                }
+            }
         } else if (server.output_layout.outputAt(server.cursor.x, server.cursor.y)) |wlr_out| {
             for (server.workspaces) |ws| {
                 if (ws.visible_on != null and ws.visible_on.?.wlr_output == wlr_out) {
@@ -790,6 +872,9 @@ pub const Server = struct {
                 }
             }
         }
+
+        // Only explicitly notify to client if we didn't return early to consume the event
+        _ = server.seat.pointerNotifyButton(event.time_msec, event.button, event.state);
     }
 
     fn cursorAxis(
@@ -904,6 +989,22 @@ pub const Server = struct {
                 if (wlr.XdgSurface.tryFromWlrSurface(surface)) |xdg_surface| {
                     if (View.fromXdgSurface(xdg_surface)) |t| {
                         t.width_percent = @min(100, t.width_percent + 5);
+                        t.workspace.arrange();
+                    }
+                }
+            },
+            .move_left, .move_right, .move_up, .move_down => if (server.seat.keyboard_state.focused_surface) |surface| {
+                if (server.focused_workspace.layout != .floating) return;
+                if (wlr.XdgSurface.tryFromWlrSurface(surface)) |xdg_surface| {
+                    if (View.fromXdgSurface(xdg_surface)) |t| {
+                        const step = 20;
+                        switch (action) {
+                            .move_left => t.x -= step,
+                            .move_right => t.x += step,
+                            .move_up => t.y -= step,
+                            .move_down => t.y += step,
+                            else => {},
+                        }
                         t.workspace.arrange();
                     }
                 }
