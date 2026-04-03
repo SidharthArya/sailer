@@ -29,6 +29,9 @@ pub const Action = enum {
     toggle_marked,
     toggle_hidden,
     toggle_urgent,
+    close,
+    toggle_maximize,
+    toggle_fullscreen,
 };
 
 pub const DisplayMode = enum {
@@ -55,7 +58,16 @@ pub const Keybinding = struct {
         if (self.key.len == 0) return .NoSymbol;
         const namez = std.heap.c_allocator.dupeZ(u8, self.key) catch return .NoSymbol;
         defer std.heap.c_allocator.free(namez);
-        const sym = xkb.Keysym.fromName(namez, .no_flags);
+        
+        var sym = xkb.Keysym.fromName(namez, .no_flags);
+        if (sym == .NoSymbol) {
+            // Try lowercase if case-sensitive lookup fails
+            const lower_name = std.ascii.allocLowerString(std.heap.c_allocator, self.key) catch return .NoSymbol;
+            defer std.heap.c_allocator.free(lower_name);
+            const lower_namez = std.heap.c_allocator.dupeZ(u8, lower_name) catch return .NoSymbol;
+            defer std.heap.c_allocator.free(lower_namez);
+            sym = xkb.Keysym.fromName(lower_namez, .no_flags);
+        }
         return sym;
     }
 

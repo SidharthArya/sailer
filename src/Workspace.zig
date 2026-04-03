@@ -44,6 +44,40 @@ pub const Workspace = struct {
         // Skip arrangement if dimensions are garbage (e.g. from uninitialized output layout or excessive shrinking)
         if (layout_box.width <= 0 or layout_box.height <= 0 or layout_box.height > 10000) return;
 
+        // Check for fullscreen or maximized views first
+        var it = self.focus_history.link.next;
+        while (it != &self.focus_history.link) : (it = it.?.next) {
+            const toplevel: *View.Toplevel = @fieldParentPtr("focus_link", it.?);
+            if (!toplevel.mapped) continue;
+
+            if (toplevel.is_fullscreen) {
+                var full_box: wlr.Box = .{ .x = 0, .y = 0, .width = 0, .height = 0 };
+                if (self.server.display_mode == .spanned) {
+                    self.server.output_layout.getBox(null, &full_box);
+                } else if (self.visible_on) |output| {
+                    self.server.output_layout.getBox(output.wlr_output, &full_box);
+                }
+
+                toplevel.x = full_box.x;
+                toplevel.y = full_box.y;
+                toplevel.scene_tree.node.setPosition(toplevel.x, toplevel.y);
+                toplevel.updateLayout(full_box.width, full_box.height);
+                _ = toplevel.xdg_toplevel.setSize(full_box.width, full_box.height);
+                toplevel.scene_tree.node.raiseToTop();
+                return;
+            }
+
+            if (toplevel.is_maximized) {
+                toplevel.x = layout_box.x;
+                toplevel.y = layout_box.y;
+                toplevel.scene_tree.node.setPosition(toplevel.x, toplevel.y);
+                toplevel.updateLayout(layout_box.width, layout_box.height);
+                _ = toplevel.xdg_toplevel.setSize(layout_box.width, layout_box.height);
+                toplevel.scene_tree.node.raiseToTop();
+                return;
+            }
+        }
+
         self.layout.arrange(self, layout_box);
     }
 

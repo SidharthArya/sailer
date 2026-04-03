@@ -15,6 +15,11 @@ pub const Toplevel = struct {
     x: i32 = 0,
     y: i32 = 0,
     width_percent: i32 = 50,
+    is_maximized: bool = false,
+    is_fullscreen: bool = false,
+    saved_x: i32 = 0,
+    saved_y: i32 = 0,
+    saved_width_percent: i32 = 50,
     mapped: bool = false,
     locked: bool = false,
     sticky: bool = false,
@@ -37,6 +42,8 @@ pub const Toplevel = struct {
     destroy: wl.Listener(void) = .init(Toplevel.handleDestroy),
     request_move: wl.Listener(*wlr.XdgToplevel.event.Move) = .init(Toplevel.handleRequestMove),
     request_resize: wl.Listener(*wlr.XdgToplevel.event.Resize) = .init(Toplevel.handleRequestResize),
+    request_maximize: wl.Listener(void) = .init(Toplevel.handleRequestMaximize),
+    request_fullscreen: wl.Listener(void) = .init(Toplevel.handleRequestFullscreen),
 
     pub fn updateBorderColor(self: *Toplevel, color: *const [4]f32) void {
         if (self.border_top) |r| r.node.data = @as(?*anyopaque, @constCast(color));
@@ -51,7 +58,7 @@ pub const Toplevel = struct {
     }
 
     pub fn updateLayout(self: *Toplevel, width: i32, height: i32) void {
-        const bw = self.border_width;
+        const bw = if (self.is_fullscreen) 0 else self.border_width;
 
         // Position surface inside borders
         self.xdg_surface_tree.node.setPosition(bw, bw);
@@ -158,6 +165,8 @@ pub const Toplevel = struct {
         toplevel.destroy.link.remove();
         toplevel.request_move.link.remove();
         toplevel.request_resize.link.remove();
+        toplevel.request_maximize.link.remove();
+        toplevel.request_fullscreen.link.remove();
 
         toplevel.scene_tree.node.destroy();
         std.heap.c_allocator.destroy(toplevel);
@@ -198,6 +207,60 @@ pub const Toplevel = struct {
         server.grab_box = box;
         server.grab_box.x += toplevel.x;
         server.grab_box.y += toplevel.y;
+    }
+
+    pub fn close(self: *Toplevel) void {
+        _ = self.xdg_toplevel.sendClose();
+    }
+
+    pub fn setMaximized(self: *Toplevel, requested: bool) void {
+        if (self.is_maximized == requested) return;
+        
+        if (requested) {
+            self.saved_x = self.x;
+            self.saved_y = self.y;
+            self.saved_width_percent = self.width_percent;
+        } else {
+            self.x = self.saved_x;
+            self.y = self.saved_y;
+            self.width_percent = self.saved_width_percent;
+        }
+        
+        self.is_maximized = requested;
+        _ = self.xdg_toplevel.setMaximized(requested);
+        self.workspace.arrange();
+    }
+
+    pub fn setFullscreen(self: *Toplevel, requested: bool) void {
+        if (self.is_fullscreen == requested) return;
+
+        if (requested) {
+            if (!self.is_maximized) {
+                self.saved_x = self.x;
+                self.saved_y = self.y;
+                self.saved_width_percent = self.width_percent;
+            }
+        } else {
+            if (!self.is_maximized) {
+                self.x = self.saved_x;
+                self.y = self.saved_y;
+                self.width_percent = self.saved_width_percent;
+            }
+        }
+
+        self.is_fullscreen = requested;
+        _ = self.xdg_toplevel.setFullscreen(requested);
+        self.workspace.arrange();
+    }
+
+    fn handleRequestMaximize(listener: *wl.Listener(void)) void {
+        const toplevel: *Toplevel = @fieldParentPtr("request_maximize", listener);
+        toplevel.setMaximized(toplevel.xdg_toplevel.requested.maximized);
+    }
+
+    fn handleRequestFullscreen(listener: *wl.Listener(void)) void {
+        const toplevel: *Toplevel = @fieldParentPtr("request_fullscreen", listener);
+        toplevel.setFullscreen(toplevel.xdg_toplevel.requested.fullscreen);
     }
 };
 

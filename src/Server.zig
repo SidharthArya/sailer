@@ -527,6 +527,8 @@ pub const Server = struct {
         xdg_toplevel.events.destroy.add(&toplevel.destroy);
         xdg_toplevel.events.request_move.add(&toplevel.request_move);
         xdg_toplevel.events.request_resize.add(&toplevel.request_resize);
+        xdg_toplevel.events.request_maximize.add(&toplevel.request_maximize);
+        xdg_toplevel.events.request_fullscreen.add(&toplevel.request_fullscreen);
     }
 
     fn newXdgPopup(listener: *wl.Listener(*wlr.XdgPopup), xdg_popup: *wlr.XdgPopup) void {
@@ -1065,7 +1067,7 @@ pub const Server = struct {
                 server.updateLayout();
             },
             .focus_output => server.focusNextOutput(),
-            .toggle_locked, .toggle_sticky, .toggle_private, .toggle_marked, .toggle_hidden, .toggle_urgent => if (server.seat.keyboard_state.focused_surface) |surface| {
+            .toggle_locked, .toggle_sticky, .toggle_private, .toggle_marked, .toggle_hidden, .toggle_urgent, .close, .toggle_maximize, .toggle_fullscreen => if (server.seat.keyboard_state.focused_surface) |surface| {
                 if (wlr.XdgSurface.tryFromWlrSurface(surface)) |xdg_surface| {
                     if (View.fromXdgSurface(xdg_surface)) |t| {
                         switch (action) {
@@ -1075,6 +1077,9 @@ pub const Server = struct {
                             .toggle_marked => t.marked = !t.marked,
                             .toggle_hidden => t.hidden = !t.hidden,
                             .toggle_urgent => t.urgent = !t.urgent,
+                            .close => t.close(),
+                            .toggle_maximize => t.setMaximized(!t.is_maximized),
+                            .toggle_fullscreen => t.setFullscreen(!t.is_fullscreen),
                             else => unreachable,
                         }
                         t.workspace.arrange();
