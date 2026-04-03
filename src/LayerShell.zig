@@ -32,6 +32,7 @@ pub const LayerSurface = struct {
 
         const parent_tree = server.getLayerTree(wlr_layer_surface.pending.layer);
         const scene_layer_surface = try parent_tree.createSceneLayerSurfaceV1(wlr_layer_surface);
+        scene_layer_surface.tree.node.data = null;
 
         self.* = .{
             .server = server,

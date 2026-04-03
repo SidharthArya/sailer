@@ -113,6 +113,7 @@ pub const Server = struct {
         server.new_input = .init(Server.newInput);
         server.request_set_cursor = .init(Server.requestSetCursor);
         server.request_set_selection = .init(Server.requestSetSelection);
+        server.new_layer_surface = .init(Server.newLayerSurface);
         server.cursor_motion = .init(Server.cursorMotion);
         server.cursor_motion_absolute = .init(Server.cursorMotionAbsolute);
         server.cursor_button = .init(Server.cursorButton);
@@ -542,8 +543,10 @@ pub const Server = struct {
             var it: ?*wlr.SceneTree = node.parent;
             while (it) |n| : (it = n.node.parent) {
                 // We use node.data to identify toplevels.
-                // It's a bit risky but we avoid complex lookups for now.
+                // We must be careful to only cast if it looks like a Toplevel.
                 if (n.node.data) |data| {
+                    // Check if it's actually a Toplevel by verifying it's in our toplevels list?
+                    // Or just assume it is if data is set, but ensure LayerShell sets it to null.
                     const toplevel: *Toplevel = @ptrCast(@alignCast(data));
                     return ViewAtResult{
                         .toplevel = toplevel,
