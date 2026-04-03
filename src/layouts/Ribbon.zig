@@ -64,16 +64,8 @@ pub const Ribbon = struct {
 
         self.clampScroll(ws, box);
 
-        // Apply scroll offset and output position
-        if (ws.server.display_mode == .discrete) {
-            if (ws.visible_on) |output| {
-                if (ws.server.output_layout.get(output.wlr_output)) |l_output| {
-                    ws.scene_tree.node.setPosition(l_output.x + ws.scroll_offset_x, l_output.y);
-                }
-            }
-        } else {
-            ws.scene_tree.node.setPosition(ws.scroll_offset_x, 0);
-        }
+        // Apply scroll offset and constrained layer shell position (usable area)
+        ws.scene_tree.node.setPosition(box.x + ws.scroll_offset_x, box.y);
     }
     fn clampScroll(_: *Ribbon, ws: *Workspace, box: wlr.Box) void {
         // Never allow positive scroll (pushed to right)

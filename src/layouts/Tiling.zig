@@ -139,17 +139,12 @@ pub const Tiling = struct {
 
     pub fn arrange(self: *Tiling, ws: *Workspace, box: wlr.Box) void {
         if (self.root) |root| {
-            root.arrange(box);
+            var local_box = box;
+            local_box.x = 0;
+            local_box.y = 0;
+            root.arrange(local_box);
         }
 
-        if (ws.server.display_mode == .discrete) {
-            if (ws.visible_on) |output| {
-                if (ws.server.output_layout.get(output.wlr_output)) |l_output| {
-                    ws.scene_tree.node.setPosition(l_output.x, l_output.y);
-                }
-            }
-        } else {
-            ws.scene_tree.node.setPosition(0, 0);
-        }
+        ws.scene_tree.node.setPosition(box.x, box.y);
     }
 };
