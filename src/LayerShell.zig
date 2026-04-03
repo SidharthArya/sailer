@@ -54,14 +54,30 @@ pub const LayerSurface = struct {
         return self;
     }
 
+    pub fn configure(self: *LayerSurface) void {
+        if (!self.wlr_layer_surface.initialized) return;
+        const output = self.output orelse return;
+        var box: wlr.Box = undefined;
+        self.server.output_layout.getBox(output, &box);
+        
+        var usable_area = box;
+        self.scene_layer_surface.configure(&box, &usable_area);
+    }
+
     fn handleCommit(listener: *wl.Listener(*wlr.Surface), _: *wlr.Surface) void {
         const self: *LayerSurface = @fieldParentPtr("commit", listener);
         
         const pending = self.wlr_layer_surface.pending;
         const current = self.wlr_layer_surface.current;
-        
+
+        std.log.debug("Layer surface commit: {s} (initial={}, mapped={})", .{
+            self.wlr_layer_surface.namespace,
+            self.wlr_layer_surface.initial_commit,
+            self.wlr_layer_surface.surface.mapped,
+        });
+
         const changed = (pending.committed.layer or pending.committed.exclusive_zone or pending.committed.anchor or pending.committed.margin);
-        if (changed) {
+        if (self.wlr_layer_surface.initial_commit or changed) {
             // Update scene graph layer if it changed
             if (pending.layer != current.layer) {
                 const parent_tree = self.server.getLayerTree(pending.layer);
@@ -76,8 +92,9 @@ pub const LayerSurface = struct {
 
     fn handleMap(listener: *wl.Listener(void)) void {
         const self: *LayerSurface = @fieldParentPtr("map", listener);
-        _ = self;
-        // Layer shell handled by scene graph mostly
+        std.log.info("Layer surface MAP: {s}", .{self.wlr_layer_surface.namespace});
+        self.scene_layer_surface.tree.node.setEnabled(true);
+        self.server.updateLayout();
     }
 
     fn handleUnmap(listener: *wl.Listener(void)) void {

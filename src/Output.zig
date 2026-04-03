@@ -52,10 +52,7 @@ pub const Output = struct {
         }
 
         // 4. Create status bar
-        output.bar = Bar.create(server, output, server.config.value.font) catch |err| blk: {
-            std.log.err("Failed to create status bar for {s}: {}", .{ wlr_output.name, err });
-            break :blk null;
-        };
+        output.bar = null;
 
         return output;
     }

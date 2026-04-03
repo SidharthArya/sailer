@@ -21,7 +21,7 @@ pub const Workspace = struct {
 
     pub fn init(server: *Server, name: []const u8) !*Workspace {
         const workspace = try std.heap.c_allocator.create(Workspace);
-        const scene_tree = try server.scene.tree.createSceneTree();
+        const scene_tree = try server.window_tree.createSceneTree();
         scene_tree.node.setEnabled(true);
         workspace.* = .{
             .server = server,

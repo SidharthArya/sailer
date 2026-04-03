@@ -47,6 +47,7 @@ pub const Server = struct {
     scene_output_layout: *wlr.SceneOutputLayout,
     bg_tree: *wlr.SceneTree,
     bottom_tree: *wlr.SceneTree,
+    window_tree: *wlr.SceneTree,
     top_tree: *wlr.SceneTree,
     overlay_tree: *wlr.SceneTree,
     shm: *wlr.Shm,
@@ -102,7 +103,7 @@ pub const Server = struct {
     resize_edges: wlr.Edges = .{},
     socket_name: []const u8 = "",
     socket_name_buf: [11]u8 = undefined,
-    bar_height: i32 = 24,
+    bar_height: i32 = 0,
     mcp: ?*McpServer = null,
 
     pub fn init(server: *Server) !void {
@@ -153,6 +154,7 @@ pub const Server = struct {
         // Scene graph layers
         server.bg_tree = try server.scene.tree.createSceneTree();
         server.bottom_tree = try server.scene.tree.createSceneTree();
+        server.window_tree = try server.scene.tree.createSceneTree();
         server.top_tree = try server.scene.tree.createSceneTree();
         server.overlay_tree = try server.scene.tree.createSceneTree();
         
@@ -230,11 +232,10 @@ pub const Server = struct {
 
     fn newLayerSurface(listener: *wl.Listener(*wlr.LayerSurfaceV1), wlr_layer_surface: *wlr.LayerSurfaceV1) void {
         const server: *Server = @fieldParentPtr("new_layer_surface", listener);
-        const surface = LayerSurface.create(server, wlr_layer_surface) catch |err| {
+        _ = LayerSurface.create(server, wlr_layer_surface) catch |err| {
             std.log.err("failed to create layer surface: {}", .{err});
             return;
         };
-        server.layer_surfaces.prepend(surface);
     }
 
     pub fn handleNewXdgPopup(server: *Server, xdg_popup: *wlr.XdgPopup, parent_tree: *wlr.SceneTree) void {
@@ -390,6 +391,14 @@ pub const Server = struct {
                 ws.scene_tree.node.setEnabled(false);
             }
         }
+
+        // Re-configure layer surfaces
+        var lit = server.layer_surfaces.link.next;
+        while (lit != &server.layer_surfaces.link) : (lit = lit.?.next) {
+            const layer: *LayerSurface = @fieldParentPtr("link", lit.?);
+            layer.configure();
+        }
+
         server.refreshBars();
     }
 
