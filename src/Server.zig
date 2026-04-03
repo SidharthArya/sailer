@@ -585,16 +585,13 @@ pub const Server = struct {
             }
         }
 
-        // Sync focused workspace to the view's workspace
         server.focused_workspace = toplevel.workspace;
-        toplevel.workspace.ensureViewVisible(toplevel);
         toplevel.updateBorderColor(&toplevel.active_border_color);
-
-        // Keep physical order stable for Ribbon navigation.
-        // We only raise the scene node for visual priority.
         toplevel.scene_tree.node.raiseToTop();
         
-        // Maintain focus history (MRU stack) for focus-on-close strategy
+        // Must remove before prepend — wl_list_insert doesn't detach first,
+        // so re-inserting without removing corrupts the doubly-linked list.
+        toplevel.focus_link.remove();
         toplevel.workspace.focus_history.prepend(toplevel);
 
         _ = wlr.XdgToplevel.setActivated(toplevel.xdg_toplevel, true);
@@ -602,15 +599,9 @@ pub const Server = struct {
         if (server.seat.keyboard_state.keyboard) |kbd| {
             wlr.Seat.keyboardNotifyEnter(server.seat, surface, kbd.keycodes[0..kbd.num_keycodes], &kbd.modifiers);
         } else {
-            wlr.Seat.keyboardNotifyEnter(server.seat, surface, &[_]u32{}, &wlr.Keyboard.Modifiers{
-                .depressed = 0,
-                .latched = 0,
-                .locked = 0,
-                .group = 0,
-            });
+            wlr.Seat.keyboardNotifyEnter(server.seat, surface, &[_]u32{}, &wlr.Keyboard.Modifiers{ .depressed = 0, .latched = 0, .locked = 0, .group = 0 });
         }
 
-        // Niri style scrolling
         const ws = toplevel.workspace;
         const s = server;
         if (s.display_mode == .discrete) {
@@ -621,10 +612,8 @@ pub const Server = struct {
                 ws.scroll_offset_x = @as(i32, @divTrunc(box.width - view_width, 2)) - toplevel.x;
             }
         } else {
-            // Spanned or Mirror: use monitor where cursor is
             var output = s.output_layout.outputAt(s.cursor.x, s.cursor.y);
             if (output == null) {
-                // Fallback to first output
                 if (s.outputs.link.next != &s.outputs.link) {
                     output = (@as(*Output, @fieldParentPtr("link", s.outputs.link.next.?))).wlr_output;
                 }
@@ -634,12 +623,45 @@ pub const Server = struct {
                 var box: wlr.Box = undefined;
                 s.output_layout.getBox(o, &box);
                 const view_width = @divTrunc(box.width * toplevel.width_percent, 100);
-                // Snap to this monitor's coordinates within the workspace
                 ws.scroll_offset_x = @as(i32, @divTrunc(box.width - view_width, 2)) - (toplevel.x - box.x);
             }
         }
         ws.arrange();
-        server.refreshBars();
+    }
+
+    pub fn focusLayer(server: *Server, layer: *@import("LayerShell.zig").LayerSurface) void {
+        const surface = layer.wlr_layer_surface.surface;
+
+        if (server.seat.keyboard_state.focused_surface) |previous_surface| {
+            if (previous_surface == surface) return;
+            if (wlr.XdgSurface.tryFromWlrSurface(previous_surface)) |xdg_surface| {
+                if (xdg_surface.role_data.toplevel) |prev_t| {
+                    _ = wlr.XdgToplevel.setActivated(prev_t, false);
+                    if (View.fromXdgSurface(xdg_surface)) |v| {
+                        v.updateBorderColor(&v.inactive_border_color);
+                    }
+                }
+            }
+        }
+
+        if (server.seat.keyboard_state.keyboard) |kbd| {
+            wlr.Seat.keyboardNotifyEnter(server.seat, surface, kbd.keycodes[0..kbd.num_keycodes], &kbd.modifiers);
+        } else {
+            wlr.Seat.keyboardNotifyEnter(server.seat, surface, &[_]u32{}, &wlr.Keyboard.Modifiers{ .depressed = 0, .latched = 0, .locked = 0, .group = 0 });
+        }
+    }
+
+    pub fn focusTopWindow(server: *Server) void {
+        const ws = server.focused_workspace;
+        var it = ws.focus_history.link.next;
+        while (it != &ws.focus_history.link) : (it = it.?.next) {
+            const candidate: *@import("View.zig").Toplevel = @fieldParentPtr("focus_link", it.?);
+            if (candidate.mapped and !candidate.hidden) {
+                server.focusView(candidate, candidate.xdg_toplevel.base.surface);
+                return;
+            }
+        }
+        wlr.Seat.keyboardNotifyClearFocus(server.seat);
     }
 
     fn newInput(listener: *wl.Listener(*wlr.InputDevice), device: *wlr.InputDevice) void {

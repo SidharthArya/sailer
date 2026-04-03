@@ -95,10 +95,17 @@ pub const LayerSurface = struct {
         std.log.info("Layer surface MAP: {s}", .{self.wlr_layer_surface.namespace});
         self.scene_layer_surface.tree.node.setEnabled(true);
         self.server.updateLayout();
+
+        if (self.wlr_layer_surface.current.keyboard_interactive != .none) {
+            self.server.focusLayer(self);
+        }
     }
 
     fn handleUnmap(listener: *wl.Listener(void)) void {
         const self: *LayerSurface = @fieldParentPtr("unmap", listener);
+        if (self.server.seat.keyboard_state.focused_surface == self.wlr_layer_surface.surface) {
+            self.server.focusTopWindow();
+        }
         self.server.updateLayout();
     }
 
