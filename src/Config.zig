@@ -17,6 +17,7 @@ pub const Action = enum {
     set_display_mode,
     cycle_display_mode,
     focus_output,
+    get_screenshot,
     screenshot,
     toggle_locked,
     toggle_sticky,
@@ -63,6 +64,7 @@ pub const Keybinding = struct {
 
 pub const Config = struct {
     keybindings: []Keybinding,
+    font: []const u8 = "/usr/share/fonts/TTF/DejaVuSans.ttf",
 
     pub fn load(allocator: std.mem.Allocator) !std.json.Parsed(Config) {
         const home = std.process.getEnvVarOwned(allocator, "HOME") catch return error.NoHome;
@@ -94,7 +96,8 @@ pub const Config = struct {
     }
 
     pub fn default(allocator: std.mem.Allocator) !std.json.Parsed(Config) {
-        const default_json = "{\"keybindings\": []}";
+        const default_json = "{\"keybindings\": [], \"font\": \"/usr/share/fonts/TTF/DejaVuSans.ttf\"}";
         return std.json.parseFromSlice(Config, allocator, default_json, .{ .allocate = .alloc_always });
     }
 };
+

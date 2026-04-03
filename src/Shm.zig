@@ -15,7 +15,7 @@ pub const ShmBuffer = struct {
     format: u32,
 
     const impl = c.wlr_buffer_impl{
-        .destroy = destroy,
+        .destroy = buffer_destroy,
         .get_dmabuf = null,
         .get_shm = null,
         .begin_data_ptr_access = begin_data_ptr_access,
@@ -27,7 +27,7 @@ pub const ShmBuffer = struct {
         return @fieldParentPtr("wlr_buffer", buf);
     }
 
-    fn destroy(wlr_buffer: [*c]c.wlr_buffer) callconv(.c) void {
+    fn buffer_destroy(wlr_buffer: [*c]c.wlr_buffer) callconv(.c) void {
         const self = ShmBuffer.from(wlr_buffer);
         const aligned_data: []align(4096) const u8 = self.data;
         posix.munmap(aligned_data);
@@ -78,5 +78,39 @@ pub const ShmBuffer = struct {
 
     pub fn getWlrBuffer(self: *ShmBuffer) *wlr.Buffer {
         return @ptrCast(&self.wlr_buffer);
+    }
+
+    pub fn destroy(self: *ShmBuffer) void {
+        c.wlr_buffer_drop(&self.wlr_buffer);
+    }
+
+    pub fn saveAsPpm(self: *ShmBuffer, filename: []const u8) !void {
+        const file = try std.fs.cwd().createFile(filename, .{});
+        defer file.close();
+
+        // Zig 0.15.2 File.writer expects a buffer and returns a Writer wrapper
+        var write_buf: [4096]u8 = undefined;
+        var f_writer = file.writer(&write_buf);
+        const writer = &f_writer.interface;
+
+        const width = self.wlr_buffer.width;
+        const height = self.wlr_buffer.height;
+        try writer.print("P6\n{d} {d}\n255\n", .{ width, height });
+
+        var y: usize = 0;
+        while (y < height) : (y += 1) {
+            var x: usize = 0;
+            while (x < width) : (x += 1) {
+                const offset = y * self.stride + x * 4;
+                const b = self.data[offset + 0];
+                const g = self.data[offset + 1];
+                const r = self.data[offset + 2];
+                // XRGB8888 is BGRA in little-endian, so: [B, G, R, A]
+                try writer.writeByte(r);
+                try writer.writeByte(g);
+                try writer.writeByte(b);
+            }
+        }
+        try f_writer.end();
     }
 };

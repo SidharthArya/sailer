@@ -14,6 +14,8 @@ const Keybinding = @import("Config.zig").Keybinding;
 const layouts = @import("layouts/index.zig");
 const Tiling = @import("layouts/Tiling.zig").Tiling;
 const TilingNode = @import("layouts/Tiling.zig").TilingNode;
+const McpServer = @import("Mcp.zig").McpServer;
+const Screenshot = @import("Screenshot.zig").Screenshot;
 
 pub const KeyMatch = struct {
     sym: xkb.Keysym,
@@ -93,7 +95,7 @@ pub const Server = struct {
     socket_name: []const u8 = "",
     socket_name_buf: [11]u8 = undefined,
     bar_height: i32 = 24,
-    // mcp: ?*McpServer = null,
+    mcp: ?*McpServer = null,
 
     pub fn init(server: *Server) !void {
         // Initialize listeners and fields with defaults explicitly to avoid garbage
@@ -191,10 +193,10 @@ pub const Server = struct {
         server.socket_name = try wl_server.addSocketAuto(&server.socket_name_buf);
         std.log.info("Running compositor on WAYLAND_DISPLAY={s}", .{server.socket_name});
 
-        // server.mcp = McpServer.init(server, std.heap.c_allocator) catch |err| blk: {
-        //     std.log.err("failed to initialize MCP server: {}", .{err});
-        //     break :blk null;
-        // };
+        server.mcp = McpServer.init(server, std.heap.c_allocator) catch |err| blk: {
+            std.log.err("failed to initialize MCP server: {}", .{err});
+            break :blk null;
+        };
     }
 
     pub fn warpCursorToOutput(server: *Server, wlr_output: *wlr.Output) void {
@@ -848,6 +850,7 @@ pub const Server = struct {
             .switch_workspace => if (kb.workspace_index) |idx| {
                 server.switchToWorkspace(idx - 1);
             },
+            .get_screenshot, .screenshot => server.takeScreenshot(),
             .set_display_mode => if (kb.display_mode) |mode| {
                 server.display_mode = mode;
                 server.updateLayout();
@@ -861,12 +864,6 @@ pub const Server = struct {
                 server.updateLayout();
             },
             .focus_output => server.focusNextOutput(),
-            .screenshot => {
-                const timestamp = std.time.timestamp();
-                var cmd_buf: [512]u8 = undefined;
-                const cmd = std.fmt.bufPrint(&cmd_buf, "mkdir -p ~/Pictures/screenshots && grim ~/Pictures/screenshots/sa_screenshot_{d}.png", .{timestamp}) catch "grim";
-                server.spawn(cmd);
-            },
             .toggle_locked, .toggle_sticky, .toggle_private, .toggle_marked, .toggle_hidden, .toggle_urgent => if (server.seat.keyboard_state.focused_surface) |surface| {
                 if (wlr.XdgSurface.tryFromWlrSurface(surface)) |xdg_surface| {
                     if (View.fromXdgSurface(xdg_surface)) |t| {
@@ -995,5 +992,15 @@ pub const Server = struct {
         server.current_sequence.clearRetainingCapacity();
         server.sequence_timer.timerUpdate(0) catch {};
         return false;
+    }
+
+    fn takeScreenshot(server: *Server) void {
+        var it = server.outputs.link.next;
+        while (it != &server.outputs.link) : (it = it.?.next) {
+            const output: *Output = @fieldParentPtr("link", it.?);
+            Screenshot.captureOutput(server.renderer, output.wlr_output, server.scene) catch |err| {
+                std.log.err("Failed to capture screenshot for {s}: {}", .{output.wlr_output.name, err});
+            };
+        }
     }
 };

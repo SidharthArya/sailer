@@ -1,51 +1,60 @@
 const std = @import("std");
+const posix = std.posix;
 const wlr = @import("wlroots");
 const Shm = @import("Shm.zig");
 
+const c = @cImport({
+    @cDefine("WLR_USE_UNSTABLE", "1");
+    @cInclude("wayland-server-core.h");
+    @cInclude("wlr/types/wlr_output.h");
+    @cInclude("wlr/types/wlr_scene.h");
+    @cInclude("wlr/types/wlr_buffer.h");
+    @cInclude("wlr/render/wlr_renderer.h");
+    @cInclude("wlr/util/box.h");
+    @cInclude("drm_fourcc.h");
+});
+
 pub const Screenshot = struct {
-    pub fn captureOutput(allocator: std.mem.Allocator, scene_output: *wlr.SceneOutput) ![]u8 {
-        const width = scene_output.output.width;
-        const height = scene_output.output.height;
+    pub fn captureOutput(renderer: *wlr.Renderer, output: *wlr.Output, scene: *wlr.Scene) !void {
+        _ = renderer;
+        const width = output.width;
+        const height = output.height;
+
+        // 1. Create SHM buffer
+        // DRM_FORMAT_XRGB8888 is 0x34325258
+        const format: u32 = 0x34325258; // DRM_FORMAT_XRGB8888
+        const shm_buf = try Shm.ShmBuffer.create(width, height, format);
+        defer shm_buf.destroy();
+
+        // 2. Get SceneOutput
+        const scene_output = scene.getSceneOutput(output) orelse return error.SceneOutputNotFound;
         
-        // 1. Create a temporary SHM buffer for rendering
-        const shm_buf = try Shm.ShmBuffer.create(width, height, 0x34325258); // XRGB8888
-        defer shm_buf.wlr_buffer.drop();
-        
-        // 2. Prepare output state with the buffer
-        var state = wlr.Output.State.init();
-        defer state.finish();
-        
-        state.setBuffer(shm_buf.getWlrBuffer());
-        
-        // 3. Render the scene into the buffer
-        if (!scene_output.buildState(&state, null)) {
-            return error.SceneBuildStateFailed;
+        // 3. Prepare an output state with our buffer
+        var state: c.wlr_output_state = undefined;
+        c.wlr_output_state_init(&state);
+        defer c.wlr_output_state_finish(&state);
+
+        // Set the buffer in the state.
+        // We use the raw pointers for C functions.
+        const wlr_buf_ptr: *c.wlr_buffer = @ptrCast(shm_buf.getWlrBuffer());
+        c.wlr_output_state_set_buffer(&state, wlr_buf_ptr);
+
+        // 4. Render the scene graph into the buffer
+        // We need the raw scene_output pointer.
+        // The Zig wrapper often has a .ptr field.
+        const scene_output_ptr: *c.wlr_scene_output = @ptrCast(scene_output);
+
+        if (!c.wlr_scene_output_build_state(scene_output_ptr, &state, null)) {
+            return error.BuildStateFailed;
         }
+
+        // 5. Save the buffer content as PPM
+        const timestamp = std.time.timestamp();
+        var name_buf: [128]u8 = undefined;
+        const filename = try std.fmt.bufPrint(&name_buf, "/tmp/sailer-screenshot-{d}.ppm", .{timestamp});
         
-        // 4. Wrap the raw pixels in a BMP container
-        const header_size = 54;
-        const pixel_data_size = shm_buf.data.len;
-        const total_size = header_size + pixel_data_size;
-        
-        var bmp = try allocator.alloc(u8, total_size);
-        errdefer allocator.free(bmp);
-        
-        // BMP Header (Little Endian)
-        @memset(bmp[0..header_size], 0);
-        bmp[0] = 'B'; bmp[1] = 'M';
-        std.mem.writeInt(u32, bmp[2..6], @intCast(total_size), .little);
-        std.mem.writeInt(u32, bmp[10..14], header_size, .little);
-        
-        // DIB Header (BITMAPINFOHEADER)
-        std.mem.writeInt(u32, bmp[14..18], 40, .little);
-        std.mem.writeInt(i32, bmp[18..22], width, .little);
-        std.mem.writeInt(i32, bmp[22..26], -height, .little); // Top-down
-        std.mem.writeInt(u16, bmp[26..28], 1, .little);
-        std.mem.writeInt(u16, bmp[28..30], 32, .little); // 32bpp (XRGB)
-        std.mem.writeInt(u32, bmp[34..38], @intCast(pixel_data_size), .little);
-        
-        @memcpy(bmp[header_size..], shm_buf.data);
-        
-        return bmp;
+        try shm_buf.saveAsPpm(filename);
+
+        std.log.info("Screenshot saved to {s}", .{filename});
     }
 };

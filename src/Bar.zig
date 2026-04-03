@@ -30,7 +30,7 @@ pub const Bar = struct {
     ft_library: c.FT_Library,
     ft_face: c.FT_Face,
     
-    pub fn create(server: *Server, output: *Output) !*Bar {
+    pub fn create(server: *Server, output: *Output, font_path: []const u8) !*Bar {
         const bar = try std.heap.c_allocator.create(Bar);
         
         var ft_library: c.FT_Library = undefined;
@@ -38,8 +38,9 @@ pub const Bar = struct {
         errdefer _ = c.FT_Done_FreeType(ft_library);
 
         var ft_face: c.FT_Face = undefined;
-        const font_path = "/usr/share/fonts/TTF/DejaVuSans.ttf";
-        if (c.FT_New_Face(ft_library, font_path, 0, &ft_face) != 0) {
+        const font_path_z = try std.heap.c_allocator.dupeZ(u8, font_path);
+        defer std.heap.c_allocator.free(font_path_z);
+        if (c.FT_New_Face(ft_library, font_path_z, 0, &ft_face) != 0) {
             std.log.err("Failed to load font: {s}", .{font_path});
             return error.FontLoadFailed;
         }
@@ -98,22 +99,23 @@ pub const Bar = struct {
         ) orelse return;
         defer _ = c.pixman_image_unref(pix);
 
-        // Background
-        var bg_color = c.pixman_color_t{
-            .red = 0x1A1A,
-            .green = 0x1A1A,
-            .blue = 0x2222,
-            .alpha = 0xF000,
-        };
-        _ = c.pixman_image_fill_rectangles(c.PIXMAN_OP_SRC, pix, &bg_color, 1, &[_]c.pixman_rectangle16_t{.{
+        // Catppuccin Mocha Palette
+        const pink = c.pixman_color_t{ .red = 0xf5f5, .green = 0xc2c2, .blue = 0xe7e7, .alpha = 0xffff };
+        const mauve = c.pixman_color_t{ .red = 0xcbcb, .green = 0xa6a6, .blue = 0xf7f7, .alpha = 0xffff };
+        const blue = c.pixman_color_t{ .red = 0x8989, .green = 0xb4b4, .blue = 0xfafa, .alpha = 0xffff };
+        const subtext = c.pixman_color_t{ .red = 0xa6a6, .green = 0xadad, .blue = 0xc8c8, .alpha = 0xffff };
+        const crust = c.pixman_color_t{ .red = 0x1111, .green = 0x1111, .blue = 0x1b1b, .alpha = 0xffff };
+        const base = c.pixman_color_t{ .red = 0x1e1e, .green = 0x1e1e, .blue = 0x2e2e, .alpha = 0xffff };
+
+        // Background (Crust)
+        _ = c.pixman_image_fill_rectangles(c.PIXMAN_OP_SRC, pix, &crust, 1, &[_]c.pixman_rectangle16_t{.{
             .x = 0,
             .y = 0,
             .width = @intCast(self.width),
             .height = @intCast(self.height),
         }});
 
-        var x_offset: i32 = 10;
-        
+        var x_offset: i32 = 12;
         for (self.server.workspaces, 1..) |ws, i| {
             var label_buf: [4]u8 = undefined;
             const label = std.fmt.bufPrint(&label_buf, " {d} ", .{i}) catch " ?";
@@ -121,33 +123,32 @@ pub const Bar = struct {
             const is_focused = (self.server.focused_workspace == ws);
             const has_views = (ws.views.link.next != &ws.views.link);
             
-            const text_color = if (is_focused) 
-                c.pixman_color_t{ .red = 0xFFFF, .green = 0xFFFF, .blue = 0xFFFF, .alpha = 0xFFFF }
-            else if (has_views)
-                c.pixman_color_t{ .red = 0xAAAA, .green = 0xAAAA, .blue = 0xAAAA, .alpha = 0xFFFF }
-            else
-                c.pixman_color_t{ .red = 0x4444, .green = 0x4444, .blue = 0x4444, .alpha = 0xFFFF };
-
             if (is_focused) {
-                 _ = c.pixman_image_fill_rectangles(c.PIXMAN_OP_OVER, pix, &c.pixman_color_t{ .red = 0x3D3D, .green = 0x4B4B, .blue = 0x7575, .alpha = 0xFFFF }, 1, &[_]c.pixman_rectangle16_t{.{
+                // Focus highlight (Mauve)
+                 _ = c.pixman_image_fill_rectangles(c.PIXMAN_OP_OVER, pix, &mauve, 1, &[_]c.pixman_rectangle16_t{.{
                     .x = @intCast(x_offset),
-                    .y = 2,
-                    .width = 24,
-                    .height = @intCast(self.height - 4),
+                    .y = 3,
+                    .width = 26,
+                    .height = @intCast(self.height - 6),
                 }});
+                self.drawText(pixels, label, x_offset, 17, base);
+            } else if (has_views) {
+                self.drawText(pixels, label, x_offset, 17, pink);
+            } else {
+                self.drawText(pixels, label, x_offset, 17, subtext);
             }
-
-            self.drawText(pixels, label, x_offset, 18, text_color);
-            x_offset += 28;
+            
+            x_offset += 32;
         }
 
+        // Clock (Blue)
         const now = std.time.timestamp();
         var time_buf: [32]u8 = undefined;
         const day_seconds = @mod(now, 86400);
         const hours = @divTrunc(day_seconds, 3600);
         const minutes = @divTrunc(@mod(day_seconds, 3600), 60);
         const time_str = std.fmt.bufPrint(&time_buf, "{d:0>2}:{d:0>2} UTC", .{hours, minutes}) catch "00:00";
-        self.drawText(pixels, time_str, self.width - 100, 18, .{ .red = 0xFFFF, .green = 0xFFFF, .blue = 0x7FFF, .alpha = 0xFFFF });
+        self.drawText(pixels, time_str, self.width - 110, 17, blue);
         
         self.wlr_buffer.endDataPtrAccess();
 
@@ -155,9 +156,13 @@ pub const Bar = struct {
         self.scene_buffer.setBuffer(self.wlr_buffer);
     }
 
-    fn drawText(self: *Bar, pixels: [*]u32, text: []const u8, x: i32, y: i32, color: c.pixman_color_t) void {
+    fn drawText(self: *Bar, pixels: [*]u32, text_str: []const u8, x: i32, y: i32, color_raw: c.pixman_color_t) void {
+        const r_s = @as(u32, color_raw.red >> 8);
+        const g_s = @as(u32, color_raw.green >> 8);
+        const b_s = @as(u32, color_raw.blue >> 8);
+
         var pen_x = x;
-        for (text) |char| {
+        for (text_str) |char| {
             if (c.FT_Load_Char(self.ft_face, char, c.FT_LOAD_RENDER) != 0) continue;
             const glyph = self.ft_face.*.glyph.*;
             const bitmap = glyph.bitmap;
@@ -174,11 +179,22 @@ pub const Bar = struct {
 
                     if (px >= 0 and px < self.width and py >= 0 and py < self.height) {
                          const offset = @as(usize, @intCast(py * self.width + px));
+                         const dst = pixels[offset];
+                         
+                         // Extract dst components (XRGB -> R, G, B)
+                         const r_d = (dst >> 16) & 0xFF;
+                         const g_d = (dst >> 8) & 0xFF;
+                         const b_d = dst & 0xFF;
+
                          const a = @as(u32, alpha);
-                         const rb = ((color.red >> 8) * a) >> 8;
-                         const gb = ((color.green >> 8) * a) >> 8;
-                         const bb = ((color.blue >> 8) * a) >> 8;
-                         pixels[offset] = (a << 24) | (rb << 16) | (gb << 8) | bb;
+                         const inv_a = 255 - a;
+
+                         // Alpha blend: (src * alpha + dst * (255 - alpha)) / 255
+                         const r_out = (r_s * a + r_d * inv_a) / 255;
+                         const g_out = (g_s * a + g_d * inv_a) / 255;
+                         const b_out = (b_s * a + b_d * inv_a) / 255;
+
+                         pixels[offset] = (r_out << 16) | (g_out << 8) | b_out;
                     }
                 }
             }

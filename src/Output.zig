@@ -48,12 +48,12 @@ pub const Output = struct {
         if (output.background) |bg| {
             bg.node.setPosition(box.x, box.y);
             bg.node.setEnabled(true);
-            std.log.info("Background created for {s} at ({d}, {d}) {d}x{d} (parent=bg_tree)", .{wlr_output.name, box.x, box.y, box.width, box.height});
+            std.log.info("Background created for {s} at ({d}, {d}) {d}x{d} (parent=bg_tree)", .{ wlr_output.name, box.x, box.y, box.width, box.height });
         }
 
         // 4. Create status bar
-        output.bar = Bar.create(server, output) catch |err| blk: {
-            std.log.err("Failed to create status bar for {s}: {}", .{wlr_output.name, err});
+        output.bar = Bar.create(server, output, server.config.value.font) catch |err| blk: {
+            std.log.err("Failed to create status bar for {s}: {}", .{ wlr_output.name, err });
             break :blk null;
         };
 
@@ -77,7 +77,7 @@ pub const Output = struct {
             bg.node.setPosition(box.x, box.y);
         }
 
-//        if (output.bar) |bar| bar.update();
+        //        if (output.bar) |bar| bar.update();
 
         if (!scene_output.commit(null)) {
             std.log.err("scene_output.commit failed on {s}", .{output.wlr_output.name});
@@ -102,7 +102,7 @@ pub const Output = struct {
         if (output.background) |bg| {
             bg.setSize(box.width, box.height);
             bg.node.setPosition(box.x, box.y);
-            std.log.info("Background resized for {s} to {d}x{d} at ({d}, {d})", .{output.wlr_output.name, box.width, box.height, box.x, box.y});
+            std.log.info("Background resized for {s} to {d}x{d} at ({d}, {d})", .{ output.wlr_output.name, box.width, box.height, box.x, box.y });
         }
     }
 
