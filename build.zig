@@ -143,12 +143,14 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
+    exe.root_module.addCMacro("WLR_USE_UNSTABLE", "1");
 
     exe.linkLibC();
     exe.linkSystemLibrary("wlroots-0.19");
     exe.linkSystemLibrary("wayland-server");
     exe.linkSystemLibrary("xkbcommon");
     exe.linkSystemLibrary("pixman-1");
+    exe.linkSystemLibrary("freetype2");
 
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
