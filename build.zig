@@ -94,6 +94,7 @@ pub fn build(b: *std.Build) void {
     scanner.addSystemProtocol("staging/tearing-control/tearing-control-v1.xml");
     scanner.addSystemProtocol("staging/content-type/content-type-v1.xml");
     scanner.addSystemProtocol("staging/ext-image-copy-capture/ext-image-copy-capture-v1.xml");
+    scanner.addCustomProtocol(b.path("protocols/wlr-layer-shell-unstable-v1.xml"));
 
     scanner.generate("wl_compositor", 4);
     scanner.generate("wl_subcompositor", 1);
@@ -102,6 +103,7 @@ pub fn build(b: *std.Build) void {
     scanner.generate("wl_seat", 7);
     scanner.generate("wl_data_device_manager", 3);
     scanner.generate("xdg_wm_base", 2);
+    scanner.generate("zwlr_layer_shell_v1", 4);
     scanner.generate("ext_session_lock_manager_v1", 1);
     scanner.generate("ext_image_copy_capture_manager_v1", 1);
     scanner.generate("zwp_pointer_gestures_v1", 3);

@@ -4,6 +4,7 @@ const wlr = @import("wlroots");
 const Server = @import("Server.zig").Server;
 const View = @import("View.zig");
 const Layout = @import("layouts/index.zig").Layout;
+const LayerSurface = @import("LayerShell.zig").LayerSurface;
 
 pub const Workspace = struct {
     server: *Server,
@@ -36,21 +37,63 @@ pub const Workspace = struct {
     }
 
     pub fn arrange(self: *Workspace) void {
-        var box: wlr.Box = .{ .x = 0, .y = 0, .width = 0, .height = 0 };
+        const layout_box = self.getUsableArea();
+        
+        // Skip arrangement if dimensions are garbage (e.g. from uninitialized output layout or excessive shrinking)
+        if (layout_box.width <= 0 or layout_box.height <= 0 or layout_box.height > 10000) return;
+
+        self.layout.arrange(self, layout_box);
+    }
+
+    pub fn getUsableArea(self: *Workspace) wlr.Box {
+        var box: wlr.Box = .{ .x = 0, .y = 0, .width = 0, .height = 0};
         if (self.server.display_mode == .spanned) {
             self.server.output_layout.getBox(null, &box);
         } else if (self.visible_on) |output| {
             self.server.output_layout.getBox(output.wlr_output, &box);
-        } else return;
+        } else return box;
 
-        // Skip arrangement if dimensions are garbage (e.g. from uninitialized output layout)
-        if (box.width <= 0 or box.height <= 24 or box.height > 10000) return;
+        if (box.width <= 0 or box.height <= 0) return box;
 
-        var layout_box = box;
-        layout_box.y += self.server.bar_height;
-        layout_box.height -= self.server.bar_height;
+        var usable = box;
+        
+        // Subtract hardcoded bar for now (backward compatibility)
+        if (self.server.bar_height > 0) {
+            usable.y += self.server.bar_height;
+            usable.height -= self.server.bar_height;
+        }
 
-        self.layout.arrange(self, layout_box);
+        // Subtract Layer Shell exclusive zones
+        var it = self.server.layer_surfaces.link.next;
+        while (it != &self.server.layer_surfaces.link) : (it = it.?.next) {
+            const layer: *LayerSurface = @fieldParentPtr("link", it.?);
+            if (!layer.wlr_layer_surface.surface.mapped) continue;
+            
+            // Check if it's on this output
+            if (layer.output) |out| {
+                if (self.visible_on) |v_out| {
+                   if (out != v_out.wlr_output) continue;
+                } else if (self.server.display_mode != .spanned) continue;
+            }
+
+            const state = layer.wlr_layer_surface.current;
+            if (state.exclusive_zone <= 0) continue;
+
+            const anchor = state.anchor;
+            if (anchor.top and !anchor.bottom) {
+                usable.y += @as(i32, @intCast(state.exclusive_zone));
+                usable.height -= @as(i32, @intCast(state.exclusive_zone));
+            } else if (anchor.bottom and !anchor.top) {
+                usable.height -= @as(i32, @intCast(state.exclusive_zone));
+            } else if (anchor.left and !anchor.right) {
+                usable.x += @as(i32, @intCast(state.exclusive_zone));
+                usable.width -= @as(i32, @intCast(state.exclusive_zone));
+            } else if (anchor.right and !anchor.left) {
+                usable.width -= @as(i32, @intCast(state.exclusive_zone));
+            }
+        }
+        
+        return usable;
     }
 
 

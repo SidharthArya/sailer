@@ -16,6 +16,7 @@ const Tiling = @import("layouts/Tiling.zig").Tiling;
 const TilingNode = @import("layouts/Tiling.zig").TilingNode;
 const McpServer = @import("Mcp.zig").McpServer;
 const Screenshot = @import("Screenshot.zig").Screenshot;
+const LayerSurface = @import("LayerShell.zig").LayerSurface;
 
 pub const KeyMatch = struct {
     sym: xkb.Keysym,
@@ -45,6 +46,9 @@ pub const Server = struct {
     output_layout: *wlr.OutputLayout,
     scene_output_layout: *wlr.SceneOutputLayout,
     bg_tree: *wlr.SceneTree,
+    bottom_tree: *wlr.SceneTree,
+    top_tree: *wlr.SceneTree,
+    overlay_tree: *wlr.SceneTree,
     shm: *wlr.Shm,
     new_output: wl.Listener(*wlr.Output) = .init(Server.newOutput),
 
@@ -53,6 +57,9 @@ pub const Server = struct {
     xdg_decoration: *wlr.XdgDecorationManagerV1,
     new_xdg_toplevel: wl.Listener(*wlr.XdgToplevel) = .init(Server.newXdgToplevel),
     new_xdg_popup: wl.Listener(*wlr.XdgPopup) = .init(Server.newXdgPopup),
+    
+    layer_shell: *wlr.LayerShellV1,
+    new_layer_surface: wl.Listener(*wlr.LayerSurfaceV1) = .init(Server.newLayerSurface),
 
     workspaces: [10]*Workspace = undefined,
     focused_workspace: *Workspace = undefined,
@@ -63,7 +70,8 @@ pub const Server = struct {
     request_set_selection: wl.Listener(*wlr.Seat.event.RequestSetSelection) = .init(Server.requestSetSelection),
     keyboards: wl.list.Head(KeyboardDevice, .link) = undefined,
     outputs: wl.list.Head(@import("Output.zig").Output, .link) = undefined,
-    toplevels: wl.list.Head(Toplevel, .link) = undefined,
+    toplevels: wl.list.Head(View.Toplevel, .link) = undefined,
+    layer_surfaces: wl.list.Head(LayerSurface, .link) = undefined,
 
     cursor: *wlr.Cursor,
     cursor_mgr: *wlr.XcursorManager,
@@ -113,6 +121,7 @@ pub const Server = struct {
         server.keyboards.init();
         server.outputs.init();
         server.toplevels.init();
+        server.layer_surfaces.init();
         server.current_sequence = .{};
         server.session = null;
         server.cursor_mode = .passthrough;
@@ -139,7 +148,13 @@ pub const Server = struct {
         server.scene = try wlr.Scene.create();
         server.output_layout = try wlr.OutputLayout.create(wl_server);
         server.scene_output_layout = try server.scene.attachOutputLayout(server.output_layout);
+        
+        // Scene graph layers
         server.bg_tree = try server.scene.tree.createSceneTree();
+        server.bottom_tree = try server.scene.tree.createSceneTree();
+        server.top_tree = try server.scene.tree.createSceneTree();
+        server.overlay_tree = try server.scene.tree.createSceneTree();
+        
         server.bg_tree.node.setEnabled(true);
         server.seat = try wlr.Seat.create(wl_server, "seat0");
         server.xdg_shell = try wlr.XdgShell.create(wl_server, 3);
@@ -148,6 +163,8 @@ pub const Server = struct {
         server.cursor = try wlr.Cursor.create();
         server.cursor.attachOutputLayout(server.output_layout);
         server.cursor_mgr = try wlr.XcursorManager.create(null, 24);
+        
+        server.layer_shell = try wlr.LayerShellV1.create(wl_server, 4);
 
         server.backend.events.new_output.add(&server.new_output);
         server.xdg_shell.events.new_toplevel.add(&server.new_xdg_toplevel);
@@ -155,6 +172,7 @@ pub const Server = struct {
         server.backend.events.new_input.add(&server.new_input);
         server.seat.events.request_set_cursor.add(&server.request_set_cursor);
         server.seat.events.request_set_selection.add(&server.request_set_selection);
+        server.layer_shell.events.new_surface.add(&server.new_layer_surface);
 
         server.cursor.events.motion.add(&server.cursor_motion);
         server.cursor.events.motion_absolute.add(&server.cursor_motion_absolute);
@@ -197,6 +215,47 @@ pub const Server = struct {
             std.log.err("failed to initialize MCP server: {}", .{err});
             break :blk null;
         };
+    }
+
+    pub fn getLayerTree(server: *Server, layer: anytype) *wlr.SceneTree {
+        return switch (layer) {
+            .background => server.bg_tree,
+            .bottom => server.bottom_tree,
+            .top => server.top_tree,
+            .overlay => server.overlay_tree,
+            else => server.top_tree,
+        };
+    }
+
+    fn newLayerSurface(listener: *wl.Listener(*wlr.LayerSurfaceV1), wlr_layer_surface: *wlr.LayerSurfaceV1) void {
+        const server: *Server = @fieldParentPtr("new_layer_surface", listener);
+        const surface = LayerSurface.create(server, wlr_layer_surface) catch |err| {
+            std.log.err("failed to create layer surface: {}", .{err});
+            return;
+        };
+        server.layer_surfaces.prepend(surface);
+    }
+
+    pub fn handleNewXdgPopup(server: *Server, xdg_popup: *wlr.XdgPopup, parent_tree: *wlr.SceneTree) void {
+        const xdg_surface = xdg_popup.base;
+        const scene_tree = parent_tree.createSceneXdgSurface(xdg_surface) catch {
+            std.log.err("failed to allocate xdg popup node", .{});
+            return;
+        };
+        xdg_surface.data = scene_tree;
+
+        const popup = std.heap.c_allocator.create(Popup) catch {
+            std.log.err("failed to allocate new popup", .{});
+            return;
+        };
+        popup.* = .{
+            .xdg_popup = xdg_popup,
+            .scene_tree = scene_tree,
+        };
+
+        xdg_surface.surface.events.commit.add(&popup.commit);
+        xdg_popup.events.destroy.add(&popup.destroy);
+        _ = server;
     }
 
     pub fn warpCursorToOutput(server: *Server, wlr_output: *wlr.Output) void {
@@ -355,6 +414,7 @@ pub const Server = struct {
         server.cursor_button.link.remove();
         server.cursor_axis.link.remove();
         server.cursor_frame.link.remove();
+        server.new_layer_surface.link.remove();
 
         server.current_sequence.deinit(std.heap.c_allocator);
         server.backend.destroy();
@@ -456,29 +516,12 @@ pub const Server = struct {
         xdg_toplevel.events.request_resize.add(&toplevel.request_resize);
     }
 
-    fn newXdgPopup(_: *wl.Listener(*wlr.XdgPopup), xdg_popup: *wlr.XdgPopup) void {
-        const xdg_surface = xdg_popup.base;
-
+    fn newXdgPopup(listener: *wl.Listener(*wlr.XdgPopup), xdg_popup: *wlr.XdgPopup) void {
         const parent = wlr.XdgSurface.tryFromWlrSurface(xdg_popup.parent.?) orelse return;
         const parent_tree = @as(?*wlr.SceneTree, @ptrCast(@alignCast(parent.data))) orelse return;
 
-        const scene_tree = parent_tree.createSceneXdgSurface(xdg_surface) catch {
-            std.log.err("failed to allocate xdg popup node", .{});
-            return;
-        };
-        xdg_surface.data = scene_tree;
-
-        const popup = std.heap.c_allocator.create(Popup) catch {
-            std.log.err("failed to allocate new popup", .{});
-            return;
-        };
-        popup.* = .{
-            .xdg_popup = xdg_popup,
-            .scene_tree = scene_tree,
-        };
-
-        xdg_surface.surface.events.commit.add(&popup.commit);
-        xdg_popup.events.destroy.add(&popup.destroy);
+        const server: *Server = @fieldParentPtr("new_xdg_popup", listener);
+        server.handleNewXdgPopup(xdg_popup, parent_tree);
     }
 
     pub const ViewAtResult = struct {
