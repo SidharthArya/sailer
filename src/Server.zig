@@ -645,7 +645,7 @@ pub const Server = struct {
                 var sx: f64 = undefined;
                 var sy: f64 = undefined;
                 const node = server.scene.tree.node.at(server.cursor.x, server.cursor.y, &sx, &sy);
-                
+
                 // Only clear focus if we hit nothing (outside all outputs) or the background (rect)
                 if (node == null or node.?.type == .rect) {
                     server.cursor.setXcursor(server.cursor_mgr, "default");
@@ -702,6 +702,25 @@ pub const Server = struct {
         const server: *Server = @fieldParentPtr("cursor_button", listener);
         _ = server.seat.pointerNotifyButton(event.time_msec, event.button, event.state);
 
+        // --- NEW: Handle bar workspace clicks FIRST ---
+        if (event.state == .pressed and event.button == 0x110) { // BTN_LEFT
+            if (server.output_layout.outputAt(server.cursor.x, server.cursor.y)) |wlr_out| {
+                var it = server.outputs.link.next;
+                while (it != &server.outputs.link) : (it = it.?.next) {
+                    const output: *Output = @fieldParentPtr("link", it.?);
+
+                    if (output.wlr_output == wlr_out) {
+                        if (output.bar) |bar| {
+                            if (bar.hitTestWorkspace(server.cursor.x, server.cursor.y)) |idx| {
+                                server.switchToWorkspace(@intCast(idx));
+                                return; // 🚨 IMPORTANT: stop normal click handling
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        }
         if (event.state == .released) {
             server.cursor_mode = .passthrough;
         } else if (server.viewAt(server.cursor.x, server.cursor.y)) |res| {
@@ -999,7 +1018,7 @@ pub const Server = struct {
         while (it != &server.outputs.link) : (it = it.?.next) {
             const output: *Output = @fieldParentPtr("link", it.?);
             Screenshot.captureOutput(server.renderer, output.wlr_output, server.scene) catch |err| {
-                std.log.err("Failed to capture screenshot for {s}: {}", .{output.wlr_output.name, err});
+                std.log.err("Failed to capture screenshot for {s}: {}", .{ output.wlr_output.name, err });
             };
         }
     }

@@ -2,11 +2,7 @@ const std = @import("std");
 const posix = std.posix;
 const wlr = @import("wlroots");
 
-const c = @cImport({
-    @cDefine("WLR_USE_UNSTABLE", "1");
-    @cInclude("wlr/types/wlr_buffer.h");
-    @cInclude("wlr/interfaces/wlr_buffer.h");
-});
+const c = @import("c.zig").c;
 
 pub const ShmBuffer = struct {
     wlr_buffer: c.wlr_buffer,

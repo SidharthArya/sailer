@@ -3,16 +3,7 @@ const posix = std.posix;
 const wlr = @import("wlroots");
 const Shm = @import("Shm.zig");
 
-const c = @cImport({
-    @cDefine("WLR_USE_UNSTABLE", "1");
-    @cInclude("wayland-server-core.h");
-    @cInclude("wlr/types/wlr_output.h");
-    @cInclude("wlr/types/wlr_scene.h");
-    @cInclude("wlr/types/wlr_buffer.h");
-    @cInclude("wlr/render/wlr_renderer.h");
-    @cInclude("wlr/util/box.h");
-    @cInclude("drm_fourcc.h");
-});
+const c = @import("c.zig").c;
 
 pub const Screenshot = struct {
     pub fn captureOutput(renderer: *wlr.Renderer, output: *wlr.Output, scene: *wlr.Scene) !void {
