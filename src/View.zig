@@ -7,6 +7,7 @@ pub const Toplevel = struct {
     server: *Server,
     workspace: *@import("Workspace.zig").Workspace,
     link: wl.list.Link = undefined,
+    focus_link: wl.list.Link = undefined,
     xdg_toplevel: *wlr.XdgToplevel,
     scene_tree: *wlr.SceneTree,
     xdg_surface_tree: *wlr.SceneTree,
@@ -99,6 +100,32 @@ pub const Toplevel = struct {
         }
 
         const ws = toplevel.workspace;
+        const server = toplevel.server;
+        const was_focused = if (server.seat.keyboard_state.focused_surface) |surface| surface == toplevel.xdg_toplevel.base.surface else false;
+        
+        var next_focus: ?*Toplevel = null;
+        if (was_focused) {
+            switch (server.config.value.focus_on_close) {
+                .previous => {
+                    if (toplevel.link.next != &ws.views.link) {
+                        next_focus = @fieldParentPtr("link", toplevel.link.next.?);
+                    } else if (toplevel.link.prev != &ws.views.link) {
+                        next_focus = @fieldParentPtr("link", toplevel.link.prev.?);
+                    }
+                },
+                .last => {
+                    var it = ws.focus_history.link.next;
+                    while (it != &ws.focus_history.link) : (it = it.?.next) {
+                        const candidate: *Toplevel = @fieldParentPtr("focus_link", it.?);
+                        if (candidate != toplevel) {
+                            next_focus = candidate;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
         toplevel.mapped = false;
         if (ws.layout == .tiling) {
             if (ws.layout.tiling.root) |root| {
@@ -109,8 +136,17 @@ pub const Toplevel = struct {
         }
 
         toplevel.link.remove();
+        toplevel.focus_link.remove();
         toplevel.scene_tree.node.setEnabled(false);
         toplevel.workspace.arrange();
+
+        if (was_focused) {
+            if (next_focus) |nf| {
+                server.focusView(nf, nf.xdg_toplevel.base.surface);
+            } else {
+                wlr.Seat.keyboardNotifyClearFocus(server.seat);
+            }
+        }
     }
 
     fn handleDestroy(listener: *wl.Listener(void)) void {

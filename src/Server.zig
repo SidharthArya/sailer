@@ -508,6 +508,7 @@ pub const Server = struct {
 
         // Add to workspace list immediately so link is valid for remove() later
         ws.views.prepend(toplevel);
+        ws.focus_history.prepend(toplevel);
 
         if (ws.layout == .tiling) {
             if (ws.layout.tiling.root) |root| {
@@ -592,7 +593,9 @@ pub const Server = struct {
         // Keep physical order stable for Ribbon navigation.
         // We only raise the scene node for visual priority.
         toplevel.scene_tree.node.raiseToTop();
-        // Skip: toplevel.workspace.views.prepend(toplevel);
+        
+        // Maintain focus history (MRU stack) for focus-on-close strategy
+        toplevel.workspace.focus_history.prepend(toplevel);
 
         _ = wlr.XdgToplevel.setActivated(toplevel.xdg_toplevel, true);
 

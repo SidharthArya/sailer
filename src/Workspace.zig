@@ -13,6 +13,7 @@ pub const Workspace = struct {
     // In a real tiling WM, we will use a tree or specific layout structures.
     // For now, we will maintain a list of views in this workspace.
     views: wl.list.Head(View.Toplevel, .link) = undefined,
+    focus_history: wl.list.Head(View.Toplevel, .focus_link) = undefined,
     scene_tree: *wlr.SceneTree,
     visible_on: ?*@import("Output.zig").Output = null,
     scroll_offset_x: i32 = 0,
@@ -33,6 +34,7 @@ pub const Workspace = struct {
             .layout = .{ .ribbon = .{} },
         };
         workspace.views.init();
+        workspace.focus_history.init();
         return workspace;
     }
 
