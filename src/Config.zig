@@ -65,6 +65,8 @@ pub const Keybinding = struct {
 pub const Config = struct {
     keybindings: []Keybinding,
     font: []const u8 = "/usr/share/fonts/TTF/DejaVuSans.ttf",
+    split_ratio: f32 = 0.5,
+    gap: i32 = 20,
 
     pub fn load(allocator: std.mem.Allocator) !std.json.Parsed(Config) {
         const home = std.process.getEnvVarOwned(allocator, "HOME") catch return error.NoHome;
@@ -96,7 +98,7 @@ pub const Config = struct {
     }
 
     pub fn default(allocator: std.mem.Allocator) !std.json.Parsed(Config) {
-        const default_json = "{\"keybindings\": [], \"font\": \"/usr/share/fonts/TTF/DejaVuSans.ttf\"}";
+        const default_json = "{\"keybindings\": [], \"font\": \"/usr/share/fonts/TTF/DejaVuSans.ttf\", \"split_ratio\": 0.5, \"gap\": 20}";
         return std.json.parseFromSlice(Config, allocator, default_json, .{ .allocate = .alloc_always });
     }
 };

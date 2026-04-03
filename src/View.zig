@@ -13,7 +13,7 @@ pub const Toplevel = struct {
 
     x: i32 = 0,
     y: i32 = 0,
-    width_percent: i32 = 70,
+    width_percent: i32 = 50,
     mapped: bool = false,
     locked: bool = false,
     sticky: bool = false,

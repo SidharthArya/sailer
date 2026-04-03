@@ -49,7 +49,7 @@ pub const TilingNode = struct {
         return node;
     }
 
-    pub fn split(self: *TilingNode, allocator: std.mem.Allocator, new_view: *View.Toplevel) !void {
+    pub fn split(self: *TilingNode, allocator: std.mem.Allocator, new_view: *View.Toplevel, split_ratio: f32) !void {
         if (self.view == null) return; // Already a split node
 
         const old_view = self.view.?;
@@ -58,6 +58,7 @@ pub const TilingNode = struct {
 
         self.view = null;
         self.split_type = .horizontal; // Default
+        self.ratio = split_ratio;
         self.children[0] = old_leaf;
         self.children[1] = new_leaf;
         old_leaf.parent = self;

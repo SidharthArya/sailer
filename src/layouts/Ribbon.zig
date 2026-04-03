@@ -17,11 +17,12 @@ pub const Ribbon = struct {
             }
             view.scene_tree.node.setEnabled(true);
 
+            const gap = ws.server.config.value.gap;
             const target_width: i32 = if (box.width > 0) @divTrunc(box.width * view.width_percent, 100) else 100;
             const target_height: i32 = @max(1, box.height);
 
-            var width = target_width;
-            var height = target_height;
+            var width = target_width - gap;
+            var height = target_height - gap * 2;
 
             const min_w = if (view.xdg_toplevel.current.min_width < 10000) view.xdg_toplevel.current.min_width else 0;
             const min_h = if (view.xdg_toplevel.current.min_height < 10000) view.xdg_toplevel.current.min_height else 0;
@@ -59,7 +60,7 @@ pub const Ribbon = struct {
             view.x = current_x + offset_x;
             view.y = offset_y;
 
-            current_x += target_width + 20; // 20px gap
+            current_x += target_width;
         }
 
         self.clampScroll(ws, box);
@@ -80,7 +81,7 @@ pub const Ribbon = struct {
             const view: *View.Toplevel = @fieldParentPtr("link", it.?);
             if (!view.mapped) continue;
             const width: i32 = @divTrunc(box.width * view.width_percent, 100);
-            total_width += width + 20;
+            total_width += width;
         }
 
         const max_scroll = @max(0, box.width - total_width);

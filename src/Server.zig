@@ -493,6 +493,7 @@ pub const Server = struct {
             .xdg_toplevel = xdg_toplevel,
             .scene_tree = container,
             .xdg_surface_tree = xdg_surface_tree,
+            .width_percent = @as(i32, @intFromFloat(server.config.value.split_ratio * 100.0)),
         };
 
         // Initialize border rects
@@ -509,7 +510,7 @@ pub const Server = struct {
 
         if (ws.layout == .tiling) {
             if (ws.layout.tiling.root) |root| {
-                root.split(std.heap.c_allocator, toplevel) catch |err| {
+                root.split(std.heap.c_allocator, toplevel, server.config.value.split_ratio) catch |err| {
                     std.log.err("failed to split tiling node: {}", .{err});
                 };
             } else {
@@ -867,7 +868,7 @@ pub const Server = struct {
                     while (it != &ws.views.link) : (it = it.?.prev) {
                         const view: *Toplevel = @fieldParentPtr("link", it.?);
                         if (tiling.root) |root| {
-                            root.split(std.heap.c_allocator, view) catch {};
+                            root.split(std.heap.c_allocator, view, server.config.value.split_ratio) catch {};
                         } else {
                             tiling.root = TilingNode.createLeaf(std.heap.c_allocator, view) catch null;
                         }
