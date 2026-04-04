@@ -211,6 +211,7 @@ pub const Server = struct {
             std.log.err("failed to load config: {}, using default", .{err});
             break :blk Config.default(std.heap.c_allocator) catch unreachable;
         };
+        server.bar_height = if (server.config.bar.enabled and server.config.bar.exclusive) server.config.bar.height else 0;
 
         server.bar_timer = try loop.addTimer(*Server, handleBarTimer, server);
         server.bar_timer.timerUpdate(1000) catch {}; // First update in 1s

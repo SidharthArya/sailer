@@ -46,6 +46,7 @@ pub const FocusOnClose = enum {
 
 pub const BarConfig = struct {
     enabled: bool = true,
+    exclusive: bool = true,
     height: i32 = 32,
     font_size: u32 = 11,
     refresh_interval: u32 = 10000, // ms
@@ -207,10 +208,11 @@ pub const Config = struct {
             \\{
             \\  "font": "/usr/share/fonts/TTF/DejaVuSans.ttf",
             \\  "split_ratio": 0.5,
-            \\  "gap": 20,
+            \\  "gap": 8,
             \\  "focus_on_close": "previous",
             \\  "bar": {
             \\    "enabled": true,
+            \\    "exclusive": true,
             \\    "height": 32,
             \\    "font_size": 11,
             \\    "refresh_interval": 10000

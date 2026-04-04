@@ -21,8 +21,8 @@ pub const Ribbon = struct {
             const target_width: i32 = if (box.width > 0) @divTrunc(box.width * view.width_percent, 100) else 100;
             const target_height: i32 = @max(1, box.height);
 
-            var width = target_width - gap;
-            var height = target_height - gap * 2;
+            var width = target_width - gap * 2;
+            var height = @max(1, target_height - gap * 2);
 
             const min_w = if (view.xdg_toplevel.current.min_width < 10000) view.xdg_toplevel.current.min_width else 0;
             const min_h = if (view.xdg_toplevel.current.min_height < 10000) view.xdg_toplevel.current.min_height else 0;
