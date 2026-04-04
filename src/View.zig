@@ -44,6 +44,7 @@ pub const Toplevel = struct {
     request_resize: wl.Listener(*wlr.XdgToplevel.event.Resize) = .init(Toplevel.handleRequestResize),
     request_maximize: wl.Listener(void) = .init(Toplevel.handleRequestMaximize),
     request_fullscreen: wl.Listener(void) = .init(Toplevel.handleRequestFullscreen),
+    request_show_window_menu: wl.Listener(*wlr.XdgToplevel.event.ShowWindowMenu) = .init(Toplevel.handleRequestShowWindowMenu),
 
     pub fn updateBorderColor(self: *Toplevel, color: *const [4]f32) void {
         if (self.border_top) |r| r.node.data = @as(?*anyopaque, @constCast(color));
@@ -167,6 +168,7 @@ pub const Toplevel = struct {
         toplevel.request_resize.link.remove();
         toplevel.request_maximize.link.remove();
         toplevel.request_fullscreen.link.remove();
+        toplevel.request_show_window_menu.link.remove();
 
         toplevel.scene_tree.node.destroy();
         std.heap.c_allocator.destroy(toplevel);
@@ -261,6 +263,20 @@ pub const Toplevel = struct {
     fn handleRequestFullscreen(listener: *wl.Listener(void)) void {
         const toplevel: *Toplevel = @fieldParentPtr("request_fullscreen", listener);
         toplevel.setFullscreen(toplevel.xdg_toplevel.requested.fullscreen);
+    }
+
+    fn handleRequestShowWindowMenu(
+        listener: *wl.Listener(*wlr.XdgToplevel.event.ShowWindowMenu),
+        event: *wlr.XdgToplevel.event.ShowWindowMenu,
+    ) void {
+        const toplevel: *Toplevel = @fieldParentPtr("request_show_window_menu", listener);
+        const server = toplevel.server;
+
+        // request_show_window_menu provides coordinates relative to the surface.
+        const gx = toplevel.x + event.x;
+        const gy = toplevel.y + event.y;
+
+        server.openMenu(toplevel, gx, gy);
     }
 };
 

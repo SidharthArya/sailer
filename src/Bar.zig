@@ -12,6 +12,7 @@ const Workspaces = bar_workspaces.Workspaces;
 const Theme = @import("bar/Theme.zig").Theme;
 const bar_clock = @import("bar/Clock.zig");
 const Clock = bar_clock.Clock;
+const Renderer = @import("Renderer.zig").Renderer;
 
 pub const Bar = struct {
     server: *Server,
@@ -22,24 +23,12 @@ pub const Bar = struct {
     width: i32,
     height: i32,
 
-    ft_library: c.FT_Library,
-    ft_face: c.FT_Face,
+    renderer: Renderer,
 
     pub fn create(server: *Server, output: *Output, font_path: []const u8) !*Bar {
         const bar = try std.heap.c_allocator.create(Bar);
 
-        var ft_library: c.FT_Library = undefined;
-        if (c.FT_Init_FreeType(&ft_library) != 0) return error.FreeTypeInitFailed;
-        errdefer _ = c.FT_Done_FreeType(ft_library);
-
-        var ft_face: c.FT_Face = undefined;
-        const font_path_z = try std.heap.c_allocator.dupeZ(u8, font_path);
-        defer std.heap.c_allocator.free(font_path_z);
-        if (c.FT_New_Face(ft_library, font_path_z, 0, &ft_face) != 0) {
-            std.log.err("Failed to load font: {s}", .{font_path});
-            return error.FontLoadFailed;
-        }
-        _ = c.FT_Set_Pixel_Sizes(ft_face, 0, 14);
+        const renderer = try Renderer.init(font_path, 14);
 
         var box: wlr.Box = undefined;
         server.output_layout.getBox(output.wlr_output, &box);
@@ -65,8 +54,7 @@ pub const Bar = struct {
             .wlr_buffer = wlr_buffer,
             .width = width,
             .height = height,
-            .ft_library = ft_library,
-            .ft_face = ft_face,
+            .renderer = renderer,
         };
 
         bar.update();
@@ -120,49 +108,7 @@ pub const Bar = struct {
     }
 
     pub fn drawText(self: *Bar, pixels: [*]u32, text_str: []const u8, x: i32, y: i32, color_raw: c.pixman_color_t) void {
-        const r_s = @as(u32, color_raw.red >> 8);
-        const g_s = @as(u32, color_raw.green >> 8);
-        const b_s = @as(u32, color_raw.blue >> 8);
-
-        var pen_x = x;
-        for (text_str) |char| {
-            if (c.FT_Load_Char(self.ft_face, char, c.FT_LOAD_RENDER) != 0) continue;
-            const glyph = self.ft_face.*.glyph.*;
-            const bitmap = glyph.bitmap;
-
-            var r: u32 = 0;
-            while (r < bitmap.rows) : (r += 1) {
-                var col: u32 = 0;
-                while (col < bitmap.width) : (col += 1) {
-                    const alpha = bitmap.buffer[r * @as(u32, @intCast(bitmap.pitch)) + col];
-                    if (alpha == 0) continue;
-
-                    const px = pen_x + glyph.bitmap_left + @as(i32, @intCast(col));
-                    const py = y - glyph.bitmap_top + @as(i32, @intCast(r));
-
-                    if (px >= 0 and px < self.width and py >= 0 and py < self.height) {
-                        const offset = @as(usize, @intCast(py * self.width + px));
-                        const dst = pixels[offset];
-
-                        // Extract dst components (XRGB -> R, G, B)
-                        const r_d = (dst >> 16) & 0xFF;
-                        const g_d = (dst >> 8) & 0xFF;
-                        const b_d = dst & 0xFF;
-
-                        const a = @as(u32, alpha);
-                        const inv_a = 255 - a;
-
-                        // Alpha blend: (src * alpha + dst * (255 - alpha)) / 255
-                        const r_out = (r_s * a + r_d * inv_a) / 255;
-                        const g_out = (g_s * a + g_d * inv_a) / 255;
-                        const b_out = (b_s * a + b_d * inv_a) / 255;
-
-                        pixels[offset] = (r_out << 16) | (g_out << 8) | b_out;
-                    }
-                }
-            }
-            pen_x += @intCast(@divTrunc(glyph.advance.x, 64));
-        }
+        self.renderer.drawText(pixels, self.width, text_str, x, y, color_raw, self.width, self.height);
     }
     pub fn workspaceAt(self: *Bar, lx: i32, ly: i32) ?usize {
         return Workspaces.workspaceAt(self.server, self.height, lx, ly);
@@ -180,8 +126,7 @@ pub const Bar = struct {
     }
 
     pub fn deinit(self: *Bar) void {
-        _ = c.FT_Done_Face(self.ft_face);
-        _ = c.FT_Done_FreeType(self.ft_library);
+        self.renderer.deinit();
         self.scene_tree.node.destroy();
         self.wlr_buffer.drop();
         std.heap.c_allocator.destroy(self);

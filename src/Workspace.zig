@@ -190,6 +190,25 @@ pub const Workspace = struct {
         self.arrange();
     }
 
+    pub fn resizeView(self: *Workspace, view: *View.Toplevel, delta: i32) void {
+        const current = view.width_percent;
+        view.width_percent = @as(i32, @intCast(@max(10, @min(100, current + delta))));
+        self.arrange();
+    }
+
+    pub fn moveView(self: *Workspace, view: *View.Toplevel, delta: i32) void {
+        if (self.layout != .floating) return;
+        const step = 20;
+        switch (delta) {
+            -1 => view.x -= step, // left
+            1 => view.x += step,  // right
+            -2 => view.y -= step, // up
+            2 => view.y += step,  // down
+            else => {},
+        }
+        self.arrange();
+    }
+
     pub fn setVisible(self: *Workspace, output: ?*@import("Output.zig").Output) void {
         self.visible_on = output;
         if (output != null) {

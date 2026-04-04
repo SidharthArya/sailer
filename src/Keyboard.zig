@@ -96,32 +96,35 @@ fn handleKey(listener: *wl.Listener(*wlr.Keyboard.event.Key), event: *wlr.Keyboa
             }
 
             if (is_mod) {
-                server.last_mod_tap_ready = true;
-                if (syms.len > 0) server.last_mod_sym = syms[0];
+                if (server.active_session_lock == null) {
+                    server.last_mod_tap_ready = true;
+                    if (syms.len > 0) server.last_mod_sym = syms[0];
+                }
             } else {
                 server.last_mod_tap_ready = false;
                 server.last_mod_sym = null;
-                if (server.handleKeybind(syms, mods)) {
-                    handled = true;
+                if (server.active_session_lock == null) {
+                    if (server.handleKeybind(syms, mods)) {
+                        handled = true;
+                    }
                 }
             }
         }
     } else { // .released
         if (wlr_keyboard.xkb_state) |state| {
-            const mods = wlr_keyboard.getModifiers();
-            const syms = state.keyGetSyms(keycode);
-            if (server.last_mod_tap_ready) {
-                if (server.last_mod_sym) |last_sym| {
-                    for (syms) |sym| {
-                        if (@intFromEnum(sym) == @intFromEnum(last_sym)) {
-                            // Only trigger tap if no other sequence is in progress
-                            if (server.current_sequence.items.len == 0) {
-                                std.log.debug("Modifier Tap detected: sym={}", .{sym});
-                                _ = server.handleKeybind(syms, mods);
-                            } else {
-                                std.log.debug("Modifier released but sequence in progress, skipping tap.", .{});
+            if (server.active_session_lock == null) {
+                const mods = wlr_keyboard.getModifiers();
+                const syms = state.keyGetSyms(keycode);
+                if (server.last_mod_tap_ready) {
+                    if (server.last_mod_sym) |last_sym| {
+                        for (syms) |sym| {
+                            if (@intFromEnum(sym) == @intFromEnum(last_sym)) {
+                                if (server.current_sequence.items.len == 0) {
+                                    std.log.debug("Modifier Tap detected: sym={}", .{sym});
+                                    _ = server.handleKeybind(syms, mods);
+                                }
+                                break;
                             }
-                            break;
                         }
                     }
                 }

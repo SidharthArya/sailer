@@ -9,14 +9,18 @@ const Toplevel = View.Toplevel;
 const Popup = View.Popup;
 const KeyboardDevice = @import("Keyboard.zig").KeyboardDevice;
 const Workspace = @import("Workspace.zig").Workspace;
-const Config = @import("Config.zig").Config;
-const Keybinding = @import("Config.zig").Keybinding;
+const ConfigFile = @import("Config.zig");
+const Config = ConfigFile.Config;
+const Action = ConfigFile.Action;
+const Keybinding = ConfigFile.Keybinding;
 const layouts = @import("layouts/index.zig");
 const Tiling = @import("layouts/Tiling.zig").Tiling;
 const TilingNode = @import("layouts/Tiling.zig").TilingNode;
 const McpServer = @import("Mcp.zig").McpServer;
 const Screenshot = @import("Screenshot.zig").Screenshot;
 const LayerSurface = @import("LayerShell.zig").LayerSurface;
+const Menu = @import("Menu.zig").Menu;
+const SessionLock = @import("SessionLock.zig").SessionLock;
 
 pub const KeyMatch = struct {
     sym: xkb.Keysym,
@@ -106,6 +110,11 @@ pub const Server = struct {
     socket_name_buf: [11]u8 = undefined,
     bar_height: i32 = 0,
     mcp: ?*McpServer = null,
+    active_menu: ?*Menu = null,
+    
+    session_lock_mgr: *wlr.SessionLockManagerV1,
+    active_session_lock: ?*SessionLock = null,
+    new_session_lock: wl.Listener(*wlr.SessionLockV1) = .init(Server.newSessionLock),
 
     pub fn init(server: *Server) !void {
         // Initialize listeners and fields with defaults explicitly to avoid garbage
@@ -121,6 +130,7 @@ pub const Server = struct {
         server.cursor_button = .init(Server.cursorButton);
         server.cursor_axis = .init(Server.cursorAxis);
         server.cursor_frame = .init(Server.cursorFrame);
+        server.new_session_lock = .init(Server.newSessionLock);
         server.keyboards.init();
         server.outputs.init();
         server.toplevels.init();
@@ -138,6 +148,8 @@ pub const Server = struct {
         server.grab_y = 0;
         server.resize_edges = .{};
         server.bg_color = .{ 0.15, 0.17, 0.23, 1.0 }; // Elegant dark gray
+        server.active_menu = null;
+        server.active_session_lock = null;
 
         const wl_server = try wl.Server.create();
         const loop = wl_server.getEventLoop();
@@ -162,6 +174,13 @@ pub const Server = struct {
         server.bg_tree.node.setEnabled(true);
         server.seat = try wlr.Seat.create(wl_server, "seat0");
         server.xdg_shell = try wlr.XdgShell.create(wl_server, 3);
+        
+        server.layer_shell = try wlr.LayerShellV1.create(wl_server, 4);
+        server.layer_shell.events.new_surface.add(&server.new_layer_surface);
+
+        server.session_lock_mgr = try wlr.SessionLockManagerV1.create(wl_server);
+        server.session_lock_mgr.events.new_lock.add(&server.new_session_lock);
+
         server.xdg_activation = try wlr.XdgActivationV1.create(wl_server);
         server.xdg_decoration = try wlr.XdgDecorationManagerV1.create(wl_server);
         server.cursor = try wlr.Cursor.create();
@@ -411,6 +430,23 @@ pub const Server = struct {
         }
     }
 
+    pub fn openMenu(self: *Server, toplevel: *Toplevel, gx: i32, gy: i32) void {
+        if (self.active_menu) |menu| {
+            menu.deinit();
+        }
+        self.active_menu = Menu.create(self, toplevel, gx, gy) catch |err| {
+            std.log.err("Failed to open window menu: {}", .{err});
+            return;
+        };
+    }
+
+    pub fn closeMenu(self: *Server) void {
+        if (self.active_menu) |menu| {
+            menu.deinit();
+            self.active_menu = null;
+        }
+    }
+
     pub fn deinit(server: *Server) void {
         server.wl_server.destroyClients();
 
@@ -529,6 +565,7 @@ pub const Server = struct {
         xdg_toplevel.events.request_resize.add(&toplevel.request_resize);
         xdg_toplevel.events.request_maximize.add(&toplevel.request_maximize);
         xdg_toplevel.events.request_fullscreen.add(&toplevel.request_fullscreen);
+        xdg_toplevel.events.request_show_window_menu.add(&toplevel.request_show_window_menu);
     }
 
     fn newXdgPopup(listener: *wl.Listener(*wlr.XdgPopup), xdg_popup: *wlr.XdgPopup) void {
@@ -572,6 +609,30 @@ pub const Server = struct {
             }
         }
         return null;
+    }
+
+    fn newSessionLock(listener: *wl.Listener(*wlr.SessionLockV1), wlr_lock: *wlr.SessionLockV1) void {
+        const server: *Server = @fieldParentPtr("new_session_lock", listener);
+        if (server.active_session_lock != null) {
+            wlr_lock.destroy();
+            return;
+        }
+
+        server.active_session_lock = SessionLock.create(server, wlr_lock) catch |err| {
+            std.log.err("Failed to create session lock: {}", .{err});
+            wlr_lock.destroy();
+            return;
+        };
+    }
+
+    pub fn setOverlayEnabled(self: *Server, enabled: bool) void {
+        const visible = !enabled;
+        self.window_tree.node.setEnabled(visible);
+        self.bottom_tree.node.setEnabled(visible);
+        self.top_tree.node.setEnabled(visible);
+        
+        // Background usually stays if it's black or we can hide it too
+        self.bg_tree.node.setEnabled(visible);
     }
 
     pub fn focusView(server: *Server, toplevel: *Toplevel, surface: *wlr.Surface) void {
@@ -721,6 +782,24 @@ pub const Server = struct {
     }
 
     fn processCursorMotion(server: *Server, time_msec: u32) void {
+        if (server.active_session_lock) |_| {
+            var sx: f64 = undefined;
+            var sy: f64 = undefined;
+            if (server.scene.tree.node.at(server.cursor.x, server.cursor.y, &sx, &sy)) |node| {
+                if (node.type != .buffer) return;
+                const scene_buffer = wlr.SceneBuffer.fromNode(node);
+                const scene_surface = wlr.SceneSurface.tryFromBuffer(scene_buffer) orelse return;
+                wlr.Seat.pointerNotifyEnter(server.seat, scene_surface.surface, sx, sy);
+                wlr.Seat.pointerNotifyMotion(server.seat, time_msec, sx, sy);
+            }
+            return;
+        }
+
+        if (server.active_menu) |menu| {
+            menu.handleMotion(server.cursor.x, server.cursor.y);
+            return;
+        }
+
         switch (server.cursor_mode) {
             .passthrough => if (server.viewAt(server.cursor.x, server.cursor.y)) |res| {
                 wlr.Seat.pointerNotifyEnter(server.seat, res.surface, res.sx, res.sy);
@@ -801,8 +880,28 @@ pub const Server = struct {
         event: *wlr.Pointer.event.Button,
     ) void {
         const server: *Server = @fieldParentPtr("cursor_button", listener);
+        
+        if (server.active_session_lock) |_| {
+            _ = server.seat.pointerNotifyButton(event.time_msec, event.button, event.state);
+            return;
+        }
 
-        // Handle bar workspace clicks FIRST
+        if (server.active_menu) |menu| {
+            if (event.state == .pressed) {
+                if (menu.hitTest(server.cursor.x, server.cursor.y)) {
+                    if (menu.handleButton(server.cursor.x, server.cursor.y)) |action| {
+                        const target = menu.toplevel;
+                        server.closeMenu();
+                        server.executeAction(action, .{}, target);
+                    }
+                } else {
+                    server.closeMenu();
+                }
+            }
+            return;
+        }
+
+        _ = server.seat.pointerNotifyButton(event.time_msec, event.button, event.state);
         if (event.state == .pressed and event.button == 0x110) { // BTN_LEFT
             if (server.output_layout.outputAt(server.cursor.x, server.cursor.y)) |wlr_out| {
                 var it = server.outputs.link.next;
@@ -969,8 +1068,14 @@ pub const Server = struct {
         }
     }
 
-    fn executeAction(server: *Server, kb: Keybinding) void {
-        const action = kb.action orelse return;
+    fn executeAction(server: *Server, action: Action, kb: Keybinding, target: ?*Toplevel) void {
+        const toplevel = target orelse if (server.seat.keyboard_state.focused_surface) |surface| blk: {
+            if (wlr.XdgSurface.tryFromWlrSurface(surface)) |xdg_surface| {
+                break :blk View.fromXdgSurface(xdg_surface);
+            }
+            break :blk null;
+        } else null;
+
         switch (action) {
             .toggle_layout => {
                 const ws = server.focused_workspace;
@@ -1004,52 +1109,14 @@ pub const Server = struct {
             },
             .focus_left => server.focused_workspace.focusRelative(-1),
             .focus_right => server.focused_workspace.focusRelative(1),
-            .resize_shrink => if (server.seat.keyboard_state.focused_surface) |surface| {
-                if (wlr.XdgSurface.tryFromWlrSurface(surface)) |xdg_surface| {
-                    if (View.fromXdgSurface(xdg_surface)) |t| {
-                        t.width_percent = @max(10, t.width_percent - 5);
-                        t.workspace.arrange();
-                    }
-                }
-            },
-            .resize_expand => if (server.seat.keyboard_state.focused_surface) |surface| {
-                if (wlr.XdgSurface.tryFromWlrSurface(surface)) |xdg_surface| {
-                    if (View.fromXdgSurface(xdg_surface)) |t| {
-                        t.width_percent = @min(100, t.width_percent + 5);
-                        t.workspace.arrange();
-                    }
-                }
-            },
-            .move_left, .move_right, .move_up, .move_down => if (server.seat.keyboard_state.focused_surface) |surface| {
-                if (server.focused_workspace.layout != .floating) return;
-                if (wlr.XdgSurface.tryFromWlrSurface(surface)) |xdg_surface| {
-                    if (View.fromXdgSurface(xdg_surface)) |t| {
-                        const step = 20;
-                        switch (action) {
-                            .move_left => t.x -= step,
-                            .move_right => t.x += step,
-                            .move_up => t.y -= step,
-                            .move_down => t.y += step,
-                            else => {},
-                        }
-                        t.workspace.arrange();
-                    }
-                }
-            },
-            .reorder_left => if (server.seat.keyboard_state.focused_surface) |surface| {
-                if (wlr.XdgSurface.tryFromWlrSurface(surface)) |xdg_surface| {
-                    if (View.fromXdgSurface(xdg_surface)) |t| {
-                        t.workspace.reorderView(t, -1);
-                    }
-                }
-            },
-            .reorder_right => if (server.seat.keyboard_state.focused_surface) |surface| {
-                if (wlr.XdgSurface.tryFromWlrSurface(surface)) |xdg_surface| {
-                    if (View.fromXdgSurface(xdg_surface)) |t| {
-                        t.workspace.reorderView(t, 1);
-                    }
-                }
-            },
+            .resize_shrink => if (toplevel) |t| t.workspace.resizeView(t, -10),
+            .resize_expand => if (toplevel) |t| t.workspace.resizeView(t, 10),
+            .move_left => if (toplevel) |t| t.workspace.moveView(t, -1),
+            .move_right => if (toplevel) |t| t.workspace.moveView(t, 1),
+            .move_up => if (toplevel) |t| t.workspace.moveView(t, -2),
+            .move_down => if (toplevel) |t| t.workspace.moveView(t, 2),
+            .reorder_left => if (toplevel) |t| t.workspace.reorderView(t, -1),
+            .reorder_right => if (toplevel) |t| t.workspace.reorderView(t, 1),
             .switch_workspace => if (kb.workspace_index) |idx| {
                 server.switchToWorkspace(idx - 1);
             },
@@ -1067,24 +1134,20 @@ pub const Server = struct {
                 server.updateLayout();
             },
             .focus_output => server.focusNextOutput(),
-            .toggle_locked, .toggle_sticky, .toggle_private, .toggle_marked, .toggle_hidden, .toggle_urgent, .close, .toggle_maximize, .toggle_fullscreen => if (server.seat.keyboard_state.focused_surface) |surface| {
-                if (wlr.XdgSurface.tryFromWlrSurface(surface)) |xdg_surface| {
-                    if (View.fromXdgSurface(xdg_surface)) |t| {
-                        switch (action) {
-                            .toggle_locked => t.locked = !t.locked,
-                            .toggle_sticky => t.sticky = !t.sticky,
-                            .toggle_private => t.private = !t.private,
-                            .toggle_marked => t.marked = !t.marked,
-                            .toggle_hidden => t.hidden = !t.hidden,
-                            .toggle_urgent => t.urgent = !t.urgent,
-                            .close => t.close(),
-                            .toggle_maximize => t.setMaximized(!t.is_maximized),
-                            .toggle_fullscreen => t.setFullscreen(!t.is_fullscreen),
-                            else => unreachable,
-                        }
-                        t.workspace.arrange();
-                    }
+            .toggle_locked, .toggle_sticky, .toggle_private, .toggle_marked, .toggle_hidden, .toggle_urgent, .close, .toggle_maximize, .toggle_fullscreen => if (toplevel) |t| {
+                switch (action) {
+                    .toggle_locked => t.locked = !t.locked,
+                    .toggle_sticky => t.sticky = !t.sticky,
+                    .toggle_private => t.private = !t.private,
+                    .toggle_marked => t.marked = !t.marked,
+                    .toggle_hidden => t.hidden = !t.hidden,
+                    .toggle_urgent => t.urgent = !t.urgent,
+                    .close => t.close(),
+                    .toggle_maximize => t.setMaximized(!t.is_maximized),
+                    .toggle_fullscreen => t.setFullscreen(!t.is_fullscreen),
+                    else => unreachable,
                 }
+                t.workspace.arrange();
             },
         }
     }
@@ -1156,7 +1219,9 @@ pub const Server = struct {
                         any_match = true;
                         if (current.len == seq.len) {
                             std.log.debug("Full sequence match found!", .{});
-                            server.executeAction(kb);
+                        if (kb.action) |action| {
+                            server.executeAction(action, kb, null);
+                        }
                             full_match = true;
                             break;
                         } else {
@@ -1167,7 +1232,9 @@ pub const Server = struct {
             } else {
                 if (current.len == 1 and matchKey(kb, key, mods, false)) {
                     std.log.debug("Single keybind match found!", .{});
-                    server.executeAction(kb);
+                    if (kb.action) |action| {
+                        server.executeAction(action, kb, null);
+                    }
                     any_match = true;
                     full_match = true;
                     break;
