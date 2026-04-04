@@ -21,6 +21,7 @@ const Screenshot = @import("Screenshot.zig").Screenshot;
 const LayerSurface = @import("LayerShell.zig").LayerSurface;
 const Menu = @import("Menu.zig").Menu;
 const SessionLock = @import("SessionLock.zig").SessionLock;
+const Bar = @import("Bar.zig").Bar;
 
 pub const KeyMatch = struct {
     sym: xkb.Keysym,
@@ -35,7 +36,7 @@ fn handleSequenceTimeout(server: *Server) c_int {
 
 fn handleBarTimer(server: *Server) c_int {
     server.refreshBars();
-    server.bar_timer.timerUpdate(10000) catch {}; // Every 10 seconds
+    server.bar_timer.timerUpdate(@intCast(server.config.bar.refresh_interval)) catch {};
     return 0;
 }
 
@@ -86,7 +87,7 @@ pub const Server = struct {
     cursor_axis: wl.Listener(*wlr.Pointer.event.Axis) = .init(Server.cursorAxis),
     cursor_frame: wl.Listener(*wlr.Cursor) = .init(Server.cursorFrame),
 
-    config: std.json.Parsed(Config) = undefined,
+    config: Config = undefined,
     display_mode: @import("Config.zig").DisplayMode = .discrete,
     bg_color: [4]f32 = .{ 1.0, 0.0, 0.0, 1.0 },
 
@@ -206,6 +207,11 @@ pub const Server = struct {
         server.sequence_timer = try loop.addTimer(*Server, handleSequenceTimeout, server);
         server.sequence_timer.timerUpdate(0) catch {};
 
+        server.config = Config.load(std.heap.c_allocator) catch |err| blk: {
+            std.log.err("failed to load config: {}, using default", .{err});
+            break :blk Config.default(std.heap.c_allocator) catch unreachable;
+        };
+
         server.bar_timer = try loop.addTimer(*Server, handleBarTimer, server);
         server.bar_timer.timerUpdate(1000) catch {}; // First update in 1s
 
@@ -225,11 +231,6 @@ pub const Server = struct {
             ws.* = try Workspace.init(server, name);
         }
         server.focused_workspace = server.workspaces[0];
-
-        server.config = Config.load(std.heap.c_allocator) catch |err| blk: {
-            std.log.err("failed to load config: {}, using default", .{err});
-            break :blk Config.default(std.heap.c_allocator) catch unreachable;
-        };
 
         server.socket_name = try wl_server.addSocketAuto(&server.socket_name_buf);
         std.log.info("Running compositor on WAYLAND_DISPLAY={s}", .{server.socket_name});
@@ -487,6 +488,13 @@ pub const Server = struct {
             return;
         };
 
+        if (server.config.bar.enabled) {
+            output_ptr.bar = Bar.create(server, output_ptr, server.config.font, server.config.bar) catch |err| blk: {
+                std.log.err("Failed to create status bar for {s}: {}", .{ wlr_output.name, err });
+                break :blk null;
+            };
+        }
+
         server.updateLayout();
 
         if (server.display_mode == .discrete) {
@@ -530,7 +538,7 @@ pub const Server = struct {
             .xdg_toplevel = xdg_toplevel,
             .scene_tree = container,
             .xdg_surface_tree = xdg_surface_tree,
-            .width_percent = @as(i32, @intFromFloat(server.config.value.split_ratio * 100.0)),
+            .width_percent = @as(i32, @intFromFloat(server.config.split_ratio * 100.0)),
         };
 
         // Initialize border rects
@@ -548,7 +556,7 @@ pub const Server = struct {
 
         if (ws.layout == .tiling) {
             if (ws.layout.tiling.root) |root| {
-                root.split(std.heap.c_allocator, toplevel, server.config.value.split_ratio) catch |err| {
+                root.split(std.heap.c_allocator, toplevel, server.config.split_ratio) catch |err| {
                     std.log.err("failed to split tiling node: {}", .{err});
                 };
             } else {
@@ -1085,7 +1093,7 @@ pub const Server = struct {
                     while (it != &ws.views.link) : (it = it.?.prev) {
                         const view: *Toplevel = @fieldParentPtr("link", it.?);
                         if (tiling.root) |root| {
-                            root.split(std.heap.c_allocator, view, server.config.value.split_ratio) catch {};
+                            root.split(std.heap.c_allocator, view, server.config.split_ratio) catch {};
                         } else {
                             tiling.root = TilingNode.createLeaf(std.heap.c_allocator, view) catch null;
                         }
@@ -1152,7 +1160,7 @@ pub const Server = struct {
         }
     }
 
-    fn matchKey(kb: Keybinding, sym: xkb.Keysym, mods: wlr.Keyboard.ModifierMask, is_sequence_step: bool) bool {
+    fn matchKey(kb: anytype, sym: xkb.Keysym, mods: wlr.Keyboard.ModifierMask, is_sequence_step: bool) bool {
         const kb_sym = kb.getKeysym();
         const kb_mods = kb.getModifiers();
 
@@ -1205,7 +1213,7 @@ pub const Server = struct {
         var any_match = false;
         var full_match = false;
 
-        for (server.config.value.keybindings) |kb| {
+        for (server.config.keybindings) |kb| {
             if (kb.sequence) |seq| {
                 if (current.len <= seq.len) {
                     var match = true;

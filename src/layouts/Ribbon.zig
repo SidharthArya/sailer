@@ -17,7 +17,7 @@ pub const Ribbon = struct {
             }
             view.scene_tree.node.setEnabled(true);
 
-            const gap = ws.server.config.value.gap;
+            const gap = ws.server.config.gap;
             const target_width: i32 = if (box.width > 0) @divTrunc(box.width * view.width_percent, 100) else 100;
             const target_height: i32 = @max(1, box.height);
 

@@ -65,7 +65,7 @@ pub const Menu = struct {
         scene_tree.node.setPosition(gx, gy);
         scene_tree.node.raiseToTop();
 
-        const renderer = try Renderer.init(server.config.value.font, 14);
+        const renderer = try Renderer.init(server.config.font, 14);
 
         self.* = .{
             .server = server,

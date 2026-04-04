@@ -13,6 +13,7 @@ const Theme = @import("bar/Theme.zig").Theme;
 const bar_clock = @import("bar/Clock.zig");
 const Clock = bar_clock.Clock;
 const Renderer = @import("Renderer.zig").Renderer;
+const Config = @import("Config.zig");
 
 pub const Bar = struct {
     server: *Server,
@@ -25,16 +26,16 @@ pub const Bar = struct {
 
     renderer: Renderer,
 
-    pub fn create(server: *Server, output: *Output, font_path: []const u8) !*Bar {
+    pub fn create(server: *Server, output: *Output, font_path: []const u8, config: Config.BarConfig) !*Bar {
         const bar = try std.heap.c_allocator.create(Bar);
 
-        const renderer = try Renderer.init(font_path, 14);
+        const renderer = try Renderer.init(font_path, config.font_size);
 
         var box: wlr.Box = undefined;
         server.output_layout.getBox(output.wlr_output, &box);
 
         const width = box.width;
-        const height = 24;
+        const height = config.height;
 
         // Use a manual SHM buffer to guarantee CPU access
         const shm_buf = try Shm.ShmBuffer.create(width, height, 0x34325258); // XRGB8888

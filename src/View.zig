@@ -113,7 +113,7 @@ pub const Toplevel = struct {
         
         var next_focus: ?*Toplevel = null;
         if (was_focused) {
-            switch (server.config.value.focus_on_close) {
+            switch (server.config.focus_on_close) {
                 .previous => {
                     if (toplevel.link.next != &ws.views.link) {
                         next_focus = @fieldParentPtr("link", toplevel.link.next.?);
