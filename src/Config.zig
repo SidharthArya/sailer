@@ -31,6 +31,7 @@ pub const Action = enum {
     close,
     toggle_maximize,
     toggle_fullscreen,
+    toggle_floating,
 };
 
 pub const DisplayMode = enum {
@@ -49,6 +50,7 @@ pub const BarConfig = struct {
     exclusive: bool = true,
     height: i32 = 32,
     font_size: u32 = 11,
+    // TODO: Add configurable bar position (top/bottom) and per-output bar enable/disable.
     refresh_interval: u32 = 10000, // ms
 };
 
@@ -63,6 +65,7 @@ pub const SequenceKey = struct {
         
         var sym = xkb.Keysym.fromName(namez, .no_flags);
         if (sym == .NoSymbol) {
+            // TODO: getKeysym is duplicated verbatim in both SequenceKey and Keybinding — extract to a shared helper.
             const lower_name = std.ascii.allocLowerString(std.heap.c_allocator, self.key) catch return .NoSymbol;
             defer std.heap.c_allocator.free(lower_name);
             const lower_namez = std.heap.c_allocator.dupeZ(u8, lower_name) catch return .NoSymbol;
@@ -166,6 +169,8 @@ pub const Config = struct {
             var child: ?std.process.Child = null;
             
             if (std.mem.endsWith(u8, found_path.?, ".yaml") or std.mem.endsWith(u8, found_path.?, ".yml")) {
+                // TODO: Replace the python3 yaml->json subprocess with a native Zig YAML parser
+                //       (e.g. the bundled ymlz dependency) to remove the python3 runtime requirement.
                 const py_cmd = [_][]const u8{
                     "python3",
                     "-c",
@@ -204,6 +209,8 @@ pub const Config = struct {
     }
 
     pub fn default(allocator: std.mem.Allocator) !Config {
+        // TODO: The default config embeds no keybindings, making the compositor unusable out of the box.
+        //       Add a sensible set of default keybindings (e.g. Super+Return for terminal, Super+Q to close).
         const default_json = 
             \\{
             \\  "font": "/usr/share/fonts/TTF/DejaVuSans.ttf",

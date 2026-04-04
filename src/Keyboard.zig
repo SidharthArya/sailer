@@ -30,10 +30,13 @@ pub const KeyboardDevice = struct {
         const wlr_keyboard = device.toKeyboard();
         if (!wlr_keyboard.setKeymap(keymap)) return error.SetKeymapFailed;
         wlr_keyboard.setRepeatInfo(25, 600);
+        // TODO: Make key repeat rate and delay configurable via Config instead of hardcoded (25 rate, 600ms delay).
 
         keyboard.modifiers = .{ .notify = @ptrCast(&handleModifiersC), .link = undefined };
         keyboard.key = .{ .notify = @ptrCast(&handleKeyC), .link = undefined };
         keyboard.destroy = .{ .notify = @ptrCast(&handleDestroyC), .link = undefined };
+        // TODO: The C-callback trampolines (handleModifiersC, handleKeyC, handleDestroyC) exist to work around
+        //       a circular import. Consider restructuring to use Zig-native listeners directly.
 
         wlr_keyboard.events.modifiers.add(&keyboard.modifiers);
         wlr_keyboard.events.key.add(&keyboard.key);
@@ -88,6 +91,7 @@ fn handleKey(listener: *wl.Listener(*wlr.Keyboard.event.Key), event: *wlr.Keyboa
                 }
                 const s = @intFromEnum(sym);
                 if (s >= 0x1008FE01 and s <= 0x1008FE0C) { // XF86Switch_VT_1 through XF86Switch_VT_12
+                    // TODO: Use named XF86 keysym constants instead of raw hex range for clarity.
                     if (server.session) |session| {
                         session.changeVt(@intCast(s - 0x1008FE01 + 1)) catch {};
                         return;

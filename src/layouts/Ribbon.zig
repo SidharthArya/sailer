@@ -17,12 +17,17 @@ pub const Ribbon = struct {
             }
             view.scene_tree.node.setEnabled(true);
 
+            if (view.is_floating) {
+                view.scene_tree.node.setPosition(view.x - ws.scroll_offset_x, view.y);
+                continue;
+            }
+
             const gap = ws.server.config.gap;
             const target_width: i32 = if (box.width > 0) @divTrunc(box.width * view.width_percent, 100) else 100;
             const target_height: i32 = @max(1, box.height);
 
-            var width = target_width - gap * 2;
-            var height = @max(1, target_height - gap * 2);
+            var width: i32 = target_width - gap * 2;
+            var height: i32 = @max(1, target_height - gap * 2);
 
             const min_w = if (view.xdg_toplevel.current.min_width < 10000) view.xdg_toplevel.current.min_width else 0;
             const min_h = if (view.xdg_toplevel.current.min_height < 10000) view.xdg_toplevel.current.min_height else 0;
@@ -30,15 +35,16 @@ pub const Ribbon = struct {
             const max_h = if (view.xdg_toplevel.current.max_height < 10000) view.xdg_toplevel.current.max_height else 0;
 
             if (min_w > 0) width = @max(width, min_w);
-            if (max_w > 0) width = @min(width, @max(width, max_w)); // Ensure max is not less than calculated
+            if (max_w > 0) width = @min(width, @as(i32, @intCast(max_w)));
             if (min_h > 0) height = @max(height, min_h);
-            if (max_h > 0) height = @min(height, @max(height, max_h));
+            if (max_h > 0) height = @min(height, @as(i32, @intCast(max_h)));
 
             const bw = view.border_width;
             const xdg_w = @max(1, width - 2 * bw);
             const xdg_h = @max(1, height - 2 * bw);
 
             if (xdg_w > 10000 or xdg_h > 10000) {
+                // TODO: The 10000px sanity limit is duplicated across Ribbon, Tiling, and SmartView — extract to a shared constant.
                 std.log.err("Refusing to resize view to extreme dimensions: {d}x{d}", .{xdg_w, xdg_h});
                 continue;
             }

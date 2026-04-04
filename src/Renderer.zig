@@ -30,12 +30,15 @@ pub const Renderer = struct {
     }
 
     /// Blend a color onto the destination pixel buffer
+    // TODO: This renders one glyph at a time with no glyph caching — add a glyph cache to avoid
+    //       re-rasterizing the same characters on every bar refresh.
     pub fn drawText(self: *Renderer, pixels: [*]u32, stride_px: i32, text_str: []const u8, x: i32, y: i32, color_raw: c.pixman_color_t, width: i32, height: i32) void {
         const r_s = @as(u32, color_raw.red >> 8);
         const g_s = @as(u32, color_raw.green >> 8);
         const b_s = @as(u32, color_raw.blue >> 8);
 
         var pen_x = x;
+        // TODO: Only ASCII characters are handled — add UTF-8 decoding for proper Unicode support.
         for (text_str) |char| {
             if (c.FT_Load_Char(self.ft_face, char, c.FT_LOAD_RENDER) != 0) continue;
             const glyph = self.ft_face.*.glyph.*;

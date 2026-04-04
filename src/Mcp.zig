@@ -19,6 +19,7 @@ pub const McpServer = struct {
     }
 
     pub fn handleClient(self: *McpServer, stream: std.net.Stream) !void {
+        // TODO: handleClient is never called — there is no socket listener. Wire this up or remove it.
         var reader_buf: [16384]u8 = undefined;
         var br = std.io.bufferedReader(stream.reader());
         var bw = std.io.bufferedWriter(stream.writer());
@@ -138,6 +139,7 @@ pub const McpServer = struct {
                 });
             } else if (std.mem.eql(u8, tool_name.string, "spawn")) {
                 const cmd = args.object.get("command").?.string;
+                // TODO: The .? here will panic if "command" is missing — add proper error handling.
                 self.server.spawn(cmd);
                 try self.sendResponse(writer, id, .{
                     .content = [_]struct { type: []const u8, text: []const u8 }{

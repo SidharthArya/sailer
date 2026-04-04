@@ -38,6 +38,7 @@ pub const Bar = struct {
         const height = config.height;
 
         // Use a manual SHM buffer to guarantee CPU access
+        // TODO: The SHM buffer is recreated on every output resize — consider resizing in-place instead.
         const shm_buf = try Shm.ShmBuffer.create(width, height, 0x34325258); // XRGB8888
         const wlr_buffer = shm_buf.getWlrBuffer();
 

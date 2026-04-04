@@ -58,6 +58,7 @@ pub const TilingNode = struct {
 
         self.view = null;
         self.split_type = .horizontal; // Default
+        // TODO: Support configurable or automatic split direction (e.g. split vertically when window is taller than wide).
         self.ratio = split_ratio;
         self.children[0] = old_leaf;
         self.children[1] = new_leaf;
@@ -67,6 +68,10 @@ pub const TilingNode = struct {
 
     pub fn arrange(self: *TilingNode, box: wlr.Box) void {
         if (self.view) |v| {
+            if (v.is_floating) {
+                if (v.mapped and !v.hidden) v.scene_tree.node.setEnabled(true);
+                return;
+            }
             if (v.mapped and !v.hidden) {
                 v.scene_tree.node.setEnabled(true);
                 var width = box.width;
@@ -143,6 +148,7 @@ pub const Tiling = struct {
             var local_box = box;
             local_box.x = 0;
             local_box.y = 0;
+            // TODO: Gap/padding is not applied in tiling layout — add gap support consistent with Ribbon.
             root.arrange(local_box);
         }
 

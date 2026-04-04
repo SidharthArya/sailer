@@ -19,6 +19,7 @@ pub const Toplevel = struct {
     width_percent: i32 = 50,
     is_maximized: bool = false,
     is_fullscreen: bool = false,
+    is_floating: bool = false,
     saved_x: i32 = 0,
     saved_y: i32 = 0,
     saved_width_percent: i32 = 50,
@@ -49,11 +50,6 @@ pub const Toplevel = struct {
     request_show_window_menu: wl.Listener(*wlr.XdgToplevel.event.ShowWindowMenu) = .init(Toplevel.handleRequestShowWindowMenu),
 
     pub fn updateBorderColor(self: *Toplevel, color: *const [4]f32) void {
-        if (self.border_top) |r| r.node.data = @as(?*anyopaque, @constCast(color));
-        if (self.border_bottom) |r| r.node.data = @as(?*anyopaque, @constCast(color));
-        if (self.border_left) |r| r.node.data = @as(?*anyopaque, @constCast(color));
-        if (self.border_right) |r| r.node.data = @as(?*anyopaque, @constCast(color));
-        // Wait, setColor is the correct way, let's keep it if it exists.
         if (self.border_top) |r| r.setColor(color);
         if (self.border_bottom) |r| r.setColor(color);
         if (self.border_left) |r| r.setColor(color);
@@ -99,7 +95,7 @@ pub const Toplevel = struct {
             handle.setMaximized(toplevel.is_maximized);
             handle.setFullscreen(toplevel.is_fullscreen);
             handle.setActivated(toplevel.server.seat.keyboard_state.focused_surface == surface);
-
+            // TODO: setMinimized is not called — add minimized state tracking if needed.
             if (toplevel.workspace.visible_on) |output| {
                 if (toplevel.last_output != output.wlr_output) {
                     if (toplevel.last_output) |lo| handle.outputLeave(lo);

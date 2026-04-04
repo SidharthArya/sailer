@@ -6,6 +6,8 @@ const Shm = @import("Shm.zig");
 const c = @import("c.zig").c;
 
 pub const Screenshot = struct {
+    // TODO: The function signature takes renderer, output, and scene but the MCP path calls a different
+    //       overload (captureOutput(allocator, scene_output)) — unify the two APIs.
     pub fn captureOutput(renderer: *wlr.Renderer, output: *wlr.Output, scene: *wlr.Scene) !void {
         _ = renderer;
         const width = output.width;
@@ -40,6 +42,8 @@ pub const Screenshot = struct {
         }
 
         // 5. Save the buffer content as PPM
+        // TODO: Save as PNG or BMP instead of PPM — most tools don't handle PPM natively.
+        //       Also consider a configurable output directory instead of hardcoded /tmp.
         const timestamp = std.time.timestamp();
         var name_buf: [128]u8 = undefined;
         const filename = try std.fmt.bufPrint(&name_buf, "/tmp/sailer-screenshot-{d}.ppm", .{timestamp});

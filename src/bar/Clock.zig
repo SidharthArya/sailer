@@ -6,6 +6,8 @@ const c = @import("../c.zig").c;
 
 pub const Clock = struct {
     pub fn render(bar: *Bar, pixels: [*]u32) void {
+        // TODO: Clock only shows HH:MM — add seconds display as an optional config flag.
+        // TODO: The x position (bar.width - 60) is a magic number; compute it from the rendered text width.
         const now = c.time(null);
         var tm_local: c.struct_tm = undefined;
         _ = c.localtime_r(&now, &tm_local);

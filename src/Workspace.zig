@@ -42,6 +42,7 @@ pub const Workspace = struct {
         const layout_box = self.getUsableArea();
         
         // Skip arrangement if dimensions are garbage (e.g. from uninitialized output layout or excessive shrinking)
+        // TODO: The magic constant 10000 for height sanity check is fragile — derive a proper upper bound.
         if (layout_box.width <= 0 or layout_box.height <= 0 or layout_box.height > 10000) return;
 
         // Check for fullscreen or maximized views first
@@ -97,6 +98,7 @@ pub const Workspace = struct {
         var usable = box;
         
         // Subtract hardcoded bar for now (backward compatibility)
+        // TODO: Remove this hardcoded bar subtraction once all bar heights are tracked via Layer Shell exclusive zones.
         if (self.server.bar_height > 0) {
             usable.y += self.server.bar_height;
             usable.height -= self.server.bar_height;
@@ -201,6 +203,7 @@ pub const Workspace = struct {
 
     pub fn moveView(self: *Workspace, view: *View.Toplevel, delta: i32) void {
         if (self.layout != .floating) return;
+        // TODO: The step size of 20px is hardcoded — make it configurable or proportional to output size.
         const step = 20;
         switch (delta) {
             -1 => view.x -= step, // left
@@ -224,6 +227,7 @@ pub const Workspace = struct {
     }
 
     pub fn deinit(self: *Workspace) void {
+        std.heap.c_allocator.free(self.name);
         std.heap.c_allocator.destroy(self);
     }
 };

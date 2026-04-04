@@ -7,7 +7,10 @@ pub const SmartView = struct {
     pub fn arrange(_: *SmartView, ws: *Workspace, box: wlr.Box) void {
         var count: i32 = 0;
         var it = ws.views.link.next;
-        while (it != &ws.views.link) : (it = it.?.next) count += 1;
+        while (it != &ws.views.link) : (it = it.?.next) {
+            const view: *View.Toplevel = @fieldParentPtr("link", it.?);
+            if (!view.is_floating and view.mapped and !view.hidden) count += 1;
+        }
 
         if (count == 0) return;
 
@@ -27,6 +30,8 @@ pub const SmartView = struct {
                 continue;
             }
             view.scene_tree.node.setEnabled(true);
+
+            if (view.is_floating) continue;
 
             const r = @divTrunc(i, cols);
             const c = @mod(i, cols);

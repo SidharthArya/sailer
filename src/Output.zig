@@ -75,6 +75,8 @@ pub const Output = struct {
         }
 
         //        if (output.bar) |bar| bar.update();
+        // TODO: Bar update is commented out here — it's driven by a timer in Server instead.
+        //       Decide on one approach and remove the dead code.
 
         if (!scene_output.commit(null)) {
             std.log.err("scene_output.commit failed on {s}", .{output.wlr_output.name});

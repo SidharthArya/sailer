@@ -3,6 +3,8 @@ const Server = @import("Server.zig").Server;
 const wlr = @import("wlroots");
 const builtin = @import("builtin");
 
+// TODO: Replace std.heap.c_allocator with a proper allocator (e.g. std.heap.GeneralPurposeAllocator)
+//       to enable leak detection and better memory safety.
 const gpa = std.heap.c_allocator;
 
 pub fn main() anyerror!void {
@@ -13,6 +15,7 @@ pub fn main() anyerror!void {
     }
 
     var server: Server = undefined;
+    // TODO: Move version string to a comptime constant or build option instead of hardcoding here.
     std.log.info("Sailer Version 0.1.0-v8.2 (Stability & Performance Fix)", .{});
     try server.init();
     defer server.deinit();
@@ -40,6 +43,7 @@ pub fn main() anyerror!void {
 
     if (args.len >= 2) {
         const cmd = args[1];
+        // TODO: Support multiple startup commands (e.g. a list in config) rather than a single CLI arg.
         var child = std.process.Child.init(
             &[_][]const u8{ "/bin/sh", "-c", cmd },
             gpa,

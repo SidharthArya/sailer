@@ -70,6 +70,7 @@ pub const Server = struct {
     new_layer_surface: wl.Listener(*wlr.LayerSurfaceV1) = .init(Server.newLayerSurface),
 
     workspaces: [10]*Workspace = undefined,
+    // TODO: Make workspace count configurable instead of hardcoded to 10.
     focused_workspace: *Workspace = undefined,
 
     seat: *wlr.Seat,
@@ -91,6 +92,7 @@ pub const Server = struct {
 
     config: Config = undefined,
     display_mode: @import("Config.zig").DisplayMode = .discrete,
+    // TODO: bg_color should be driven by config/theme rather than hardcoded here.
     bg_color: [4]f32 = .{ 1.0, 0.0, 0.0, 1.0 },
 
     current_sequence: std.ArrayListUnmanaged(KeyMatch) = .{},
@@ -179,7 +181,6 @@ pub const Server = struct {
         server.xdg_shell = try wlr.XdgShell.create(wl_server, 3);
         
         server.layer_shell = try wlr.LayerShellV1.create(wl_server, 4);
-        server.layer_shell.events.new_surface.add(&server.new_layer_surface);
 
         server.session_lock_mgr = try wlr.SessionLockManagerV1.create(wl_server);
         server.session_lock_mgr.events.new_lock.add(&server.new_session_lock);
@@ -189,8 +190,6 @@ pub const Server = struct {
         server.cursor = try wlr.Cursor.create();
         server.cursor.attachOutputLayout(server.output_layout);
         server.cursor_mgr = try wlr.XcursorManager.create(null, 24);
-        
-        server.layer_shell = try wlr.LayerShellV1.create(wl_server, 4);
 
         server.backend.events.new_output.add(&server.new_output);
         server.xdg_shell.events.new_toplevel.add(&server.new_xdg_toplevel);
@@ -213,6 +212,7 @@ pub const Server = struct {
             std.log.err("failed to load config: {}, using default", .{err});
             break :blk Config.default(std.heap.c_allocator) catch unreachable;
         };
+        // TODO: Watch config file for changes and hot-reload without restarting.
         server.bar_height = if (server.config.bar.enabled and server.config.bar.exclusive) server.config.bar.height else 0;
 
         server.bar_timer = try loop.addTimer(*Server, handleBarTimer, server);
@@ -238,6 +238,7 @@ pub const Server = struct {
         for (&server.workspaces, 0..) |*ws, i| {
             var name_buf: [3]u8 = undefined;
             const name_str = std.fmt.bufPrint(&name_buf, "{d}", .{i + 1}) catch unreachable;
+            // TODO: Allow workspace names to be configured (e.g. from config file).
             const name = try std.heap.c_allocator.dupe(u8, name_str);
             ws.* = try Workspace.init(server, name);
         }
@@ -252,6 +253,7 @@ pub const Server = struct {
         // so they connect to *this* compositor's Wayland socket.
         // We do this asynchronously to avoid blocking the main server thread
         // particularly on a TTY where D-Bus/systemd might be unavailable or slow.
+        // TODO: Make the portal service names configurable; not all distros use the same set.
         var portal_child = std.process.Child.init(&[_][]const u8{
             "/bin/sh", "-c",
             "dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE && " ++
@@ -282,9 +284,13 @@ pub const Server = struct {
             std.log.err("failed to initialize MCP server: {}", .{err});
             break :blk null;
         };
+        // TODO: MCP server currently has no socket listener — it initializes but never accepts connections.
+        //       Wire up a Unix socket or TCP listener so external tools can actually connect.
     }
 
     pub fn getLayerTree(server: *Server, layer: anytype) *wlr.SceneTree {
+        // TODO: The `anytype` parameter accepts any value; restrict to wlr.LayerShellV1.Layer
+        //       to get compile-time safety and avoid the silent `else => server.top_tree` fallback.
         return switch (layer) {
             .background => server.bg_tree,
             .bottom => server.bottom_tree,
@@ -367,14 +373,8 @@ pub const Server = struct {
     pub fn spawn(server: *Server, cmd: []const u8) void {
         std.log.info("Compositor spawning command: {s}", .{cmd});
 
-        const xdg = std.process.getEnvVarOwned(std.heap.c_allocator, "XDG_RUNTIME_DIR") catch null;
-        if (xdg) |dir| {
-            std.log.debug("Child XDG_RUNTIME_DIR: {s}", .{dir});
-            std.heap.c_allocator.free(dir);
-        } else {
-            std.log.warn("Child XDG_RUNTIME_DIR is NOT SET!", .{});
-        }
-
+        // TODO: Consider using posix.fork + posix.execve directly to avoid shell injection risk
+        //       when cmd comes from untrusted sources (e.g. MCP tool calls).
         var child = std.process.Child.init(&[_][]const u8{ "/bin/sh", "-c", cmd }, std.heap.c_allocator);
         var env_map = std.process.getEnvMap(std.heap.c_allocator) catch |err| {
             std.log.err("Failed to get environment map for spawn: {}", .{err});
@@ -506,6 +506,8 @@ pub const Server = struct {
         server.cursor_axis.link.remove();
         server.cursor_frame.link.remove();
         server.new_layer_surface.link.remove();
+
+        for (server.workspaces) |ws| ws.deinit();
 
         server.current_sequence.deinit(std.heap.c_allocator);
         server.backend.destroy();
@@ -648,11 +650,11 @@ pub const Server = struct {
                 // We use node.data to identify toplevels.
                 // We must be careful to only cast if it looks like a Toplevel.
                 if (n.node.data) |data| {
-                    // Check if it's actually a Toplevel by verifying it's in our toplevels list?
-                    // Or just assume it is if data is set, but ensure LayerShell sets it to null.
+                    // TODO: This unchecked cast is unsafe — any scene tree node with non-null data
+                    //       (e.g. LayerShell surfaces) will be misidentified as a Toplevel.
+                    //       Use a tagged union or a type tag field to distinguish node types safely.
                     const toplevel: *Toplevel = @ptrCast(@alignCast(data));
-                    return ViewAtResult{
-                        .toplevel = toplevel,
+                    return ViewAtResult{                        .toplevel = toplevel,
                         .surface = scene_surface.surface,
                         .sx = sx,
                         .sy = sy,
@@ -1194,7 +1196,7 @@ pub const Server = struct {
                 server.updateLayout();
             },
             .focus_output => server.focusNextOutput(),
-            .toggle_locked, .toggle_sticky, .toggle_private, .toggle_marked, .toggle_hidden, .toggle_urgent, .close, .toggle_maximize, .toggle_fullscreen => if (toplevel) |t| {
+            .toggle_locked, .toggle_sticky, .toggle_private, .toggle_marked, .toggle_hidden, .toggle_urgent, .close, .toggle_maximize, .toggle_fullscreen, .toggle_floating => if (toplevel) |t| {
                 switch (action) {
                     .toggle_locked => t.locked = !t.locked,
                     .toggle_sticky => t.sticky = !t.sticky,
@@ -1205,6 +1207,12 @@ pub const Server = struct {
                     .close => t.close(),
                     .toggle_maximize => t.setMaximized(!t.is_maximized),
                     .toggle_fullscreen => t.setFullscreen(!t.is_fullscreen),
+                    .toggle_floating => {
+                        t.is_floating = !t.is_floating;
+                        if (t.is_floating) {
+                            t.scene_tree.node.raiseToTop();
+                        }
+                    },
                     else => unreachable,
                 }
                 t.workspace.arrange();

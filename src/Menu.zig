@@ -37,6 +37,7 @@ pub const Menu = struct {
         errdefer items.deinit(allocator);
 
         // Add default items
+        // TODO: Menu items are hardcoded — make them configurable or derive them from keybindings.
         try items.append(allocator, .{ .label = "Close", .action = .close, .y_offset = 0, .height = 24 });
         
         if (toplevel.is_maximized) {
@@ -54,6 +55,7 @@ pub const Menu = struct {
         try items.append(allocator, .{ .label = "Lock Window", .action = .toggle_locked, .y_offset = 72, .height = 24 });
         
         const width: i32 = 140;
+        // TODO: Item height (24px) and menu width (140px) are magic numbers — derive from font metrics.
         const height: i32 = @intCast(items.items.len * 24);
 
         const shm_buf = try Shm.ShmBuffer.create(width, height, 0x34325258);
@@ -131,6 +133,7 @@ pub const Menu = struct {
     }
 
     pub fn hitTest(self: *Menu, gx: f64, gy: f64) bool {
+        // TODO: Menu doesn't clamp to screen bounds — it can appear partially off-screen on small outputs.
         const x = @as(f64, @floatFromInt(self.scene_tree.node.x));
         const y = @as(f64, @floatFromInt(self.scene_tree.node.y));
         return gx >= x and gx < x + @as(f64, @floatFromInt(self.width)) and

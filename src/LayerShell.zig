@@ -60,6 +60,8 @@ pub const LayerSurface = struct {
         var box: wlr.Box = undefined;
         self.server.output_layout.getBox(output, &box);
         
+        // TODO: usable_area is passed as a copy of box but never fed back to workspace layout —
+        //       the exclusive zone from configure() is not reflected in getUsableArea().
         var usable_area = box;
         self.scene_layer_surface.configure(&box, &usable_area);
     }

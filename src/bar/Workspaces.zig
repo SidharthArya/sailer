@@ -14,6 +14,7 @@ pub const Workspaces = struct {
         pixels: [*]u32,
         x_offset: *i32,
     ) void {
+        // TODO: Workspace slot width (26px) and spacing (32px) are hardcoded — derive from font metrics or config.
         const server = bar.server;
         for (server.workspaces, 1..) |ws, i| {
             var label_buf: [4]u8 = undefined;
