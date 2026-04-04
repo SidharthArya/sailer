@@ -13,4 +13,5 @@ pub const c = @cImport({
     @cInclude("wayland-server-core.h");
     @cInclude("drm_fourcc.h");
     @cInclude("time.h");
+    @cInclude("stdlib.h");
 });

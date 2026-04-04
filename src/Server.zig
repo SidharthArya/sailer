@@ -22,6 +22,7 @@ const LayerSurface = @import("LayerShell.zig").LayerSurface;
 const Menu = @import("Menu.zig").Menu;
 const SessionLock = @import("SessionLock.zig").SessionLock;
 const Bar = @import("Bar.zig").Bar;
+const c = @import("c.zig").c;
 
 pub const KeyMatch = struct {
     sym: xkb.Keysym,
@@ -65,6 +66,7 @@ pub const Server = struct {
     new_xdg_popup: wl.Listener(*wlr.XdgPopup) = .init(Server.newXdgPopup),
     
     layer_shell: *wlr.LayerShellV1,
+    foreign_toplevel_mgr: *wlr.ForeignToplevelManagerV1,
     new_layer_surface: wl.Listener(*wlr.LayerSurfaceV1) = .init(Server.newLayerSurface),
 
     workspaces: [10]*Workspace = undefined,
@@ -223,6 +225,14 @@ pub const Server = struct {
         server.shm = try wlr.Shm.createWithRenderer(server.wl_server, 1, server.renderer);
         _ = try wlr.ScreencopyManagerV1.create(server.wl_server);
         _ = try wlr.XdgOutputManagerV1.create(server.wl_server, server.output_layout);
+        _ = try wlr.ExportDmabufManagerV1.create(server.wl_server);
+        _ = try wlr.LinuxDmabufV1.createWithRenderer(server.wl_server, 4, server.renderer);
+        server.foreign_toplevel_mgr = try wlr.ForeignToplevelManagerV1.create(server.wl_server);
+        
+        _ = try wlr.PrimarySelectionDeviceManagerV1.create(server.wl_server);
+        _ = try wlr.FractionalScaleManagerV1.create(server.wl_server, 1);
+        _ = try wlr.Viewporter.create(server.wl_server);
+        _ = try wlr.Presentation.create(server.wl_server, server.backend, 1);
 
         // Initialize 10 workspaces
         for (&server.workspaces, 0..) |*ws, i| {
@@ -234,6 +244,38 @@ pub const Server = struct {
         server.focused_workspace = server.workspaces[0];
 
         server.socket_name = try wl_server.addSocketAuto(&server.socket_name_buf);
+        _ = c.setenv("WAYLAND_DISPLAY", server.socket_name.ptr, 1);
+        _ = c.setenv("XDG_CURRENT_DESKTOP", "wlroots", 1);
+        _ = c.setenv("XDG_SESSION_TYPE", "wayland", 1);
+
+        // Synchronize environment with D-Bus and restart portal services
+        // so they connect to *this* compositor's Wayland socket.
+        // We do this asynchronously to avoid blocking the main server thread
+        // particularly on a TTY where D-Bus/systemd might be unavailable or slow.
+        var portal_child = std.process.Child.init(&[_][]const u8{
+            "/bin/sh", "-c",
+            "dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE && " ++
+                "systemctl --user stop xdg-desktop-portal-wlr xdg-desktop-portal-gnome xdg-desktop-portal && " ++
+                "systemctl --user start xdg-desktop-portal-wlr && " ++
+                "systemctl --user start xdg-desktop-portal",
+        }, std.heap.c_allocator);
+
+        var portal_env = std.process.getEnvMap(std.heap.c_allocator) catch null;
+        if (portal_env) |*env| {
+            defer env.deinit();
+            env.put("WAYLAND_DISPLAY", server.socket_name) catch {};
+            env.put("XDG_CURRENT_DESKTOP", "wlroots") catch {};
+            env.put("XDG_SESSION_TYPE", "wayland") catch {};
+            portal_child.env_map = env;
+            _ = portal_child.spawn() catch |err| {
+                std.log.err("Failed to spawn D-Bus/Portal synchronization script: {}", .{err});
+            };
+        } else {
+            _ = portal_child.spawn() catch |err| {
+                std.log.err("Failed to spawn D-Bus/Portal synchronization script: {}", .{err});
+            };
+        }
+
         std.log.info("Running compositor on WAYLAND_DISPLAY={s}", .{server.socket_name});
 
         server.mcp = McpServer.init(server, std.heap.c_allocator) catch |err| blk: {
@@ -540,6 +582,7 @@ pub const Server = struct {
             .scene_tree = container,
             .xdg_surface_tree = xdg_surface_tree,
             .width_percent = @as(i32, @intFromFloat(server.config.split_ratio * 100.0)),
+            .foreign_toplevel = wlr.ForeignToplevelHandleV1.create(server.foreign_toplevel_mgr) catch null,
         };
 
         // Initialize border rects
@@ -810,15 +853,23 @@ pub const Server = struct {
         }
 
         switch (server.cursor_mode) {
-            .passthrough => if (server.viewAt(server.cursor.x, server.cursor.y)) |res| {
-                wlr.Seat.pointerNotifyEnter(server.seat, res.surface, res.sx, res.sy);
-                wlr.Seat.pointerNotifyMotion(server.seat, time_msec, res.sx, res.sy);
-            } else {
+            .passthrough => {
                 var sx: f64 = undefined;
                 var sy: f64 = undefined;
                 const node = server.scene.tree.node.at(server.cursor.x, server.cursor.y, &sx, &sy);
+                
+                if (node) |n| {
+                    if (n.type == .buffer) {
+                        const scene_buffer = wlr.SceneBuffer.fromNode(n);
+                        if (wlr.SceneSurface.tryFromBuffer(scene_buffer)) |scene_surface| {
+                            wlr.Seat.pointerNotifyEnter(server.seat, scene_surface.surface, sx, sy);
+                            wlr.Seat.pointerNotifyMotion(server.seat, time_msec, sx, sy);
+                            return;
+                        }
+                    }
+                }
 
-                // Only clear focus if we hit nothing (outside all outputs) or the background (rect)
+                // If we reach here, we hit nothing or something that isn't a surface (like a background rect)
                 if (node == null or node.?.type == .rect) {
                     server.cursor.setXcursor(server.cursor_mgr, "default");
                     wlr.Seat.pointerClearFocus(server.seat);
@@ -910,7 +961,7 @@ pub const Server = struct {
             return;
         }
 
-        _ = server.seat.pointerNotifyButton(event.time_msec, event.button, event.state);
+
         if (event.state == .pressed and event.button == 0x110) { // BTN_LEFT
             if (server.output_layout.outputAt(server.cursor.x, server.cursor.y)) |wlr_out| {
                 var it = server.outputs.link.next;

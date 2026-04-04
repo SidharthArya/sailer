@@ -11,6 +11,8 @@ pub const Toplevel = struct {
     xdg_toplevel: *wlr.XdgToplevel,
     scene_tree: *wlr.SceneTree,
     xdg_surface_tree: *wlr.SceneTree,
+    foreign_toplevel: ?*wlr.ForeignToplevelHandleV1 = null,
+    last_output: ?*wlr.Output = null,
 
     x: i32 = 0,
     y: i32 = 0,
@@ -89,7 +91,26 @@ pub const Toplevel = struct {
             std.log.debug("Initial commit for: {s}", .{@as([*:0]const u8, @ptrCast(toplevel.xdg_toplevel.title orelse "unnamed"))});
             _ = toplevel.xdg_toplevel.base.scheduleConfigure();
         }
-        _ = surface;
+
+        // Update foreign toplevel handle
+        if (toplevel.foreign_toplevel) |handle| {
+            if (toplevel.xdg_toplevel.title) |title| handle.setTitle(title);
+            if (toplevel.xdg_toplevel.app_id) |app_id| handle.setAppId(app_id);
+            handle.setMaximized(toplevel.is_maximized);
+            handle.setFullscreen(toplevel.is_fullscreen);
+            handle.setActivated(toplevel.server.seat.keyboard_state.focused_surface == surface);
+
+            if (toplevel.workspace.visible_on) |output| {
+                if (toplevel.last_output != output.wlr_output) {
+                    if (toplevel.last_output) |lo| handle.outputLeave(lo);
+                    handle.outputEnter(output.wlr_output);
+                    toplevel.last_output = output.wlr_output;
+                }
+            } else if (toplevel.last_output) |lo| {
+                handle.outputLeave(lo);
+                toplevel.last_output = null;
+            }
+        }
     }
 
     fn handleMap(listener: *wl.Listener(void)) void {
@@ -170,6 +191,7 @@ pub const Toplevel = struct {
         toplevel.request_fullscreen.link.remove();
         toplevel.request_show_window_menu.link.remove();
 
+        if (toplevel.foreign_toplevel) |handle| handle.destroy();
         toplevel.scene_tree.node.destroy();
         std.heap.c_allocator.destroy(toplevel);
     }
