@@ -19,6 +19,7 @@ pub const Workspace = struct {
     scroll_offset_x: i32 = 0,
 
     layout: Layout,
+    prev_layout: ?Layout = null,
 
     pub fn init(server: *Server, name: []const u8) !*Workspace {
         const workspace = try std.heap.c_allocator.create(Workspace);

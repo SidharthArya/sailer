@@ -1256,6 +1256,54 @@ pub const Server = struct {
                 }
                 ws.arrange();
             },
+            .toggle_floating_layout => {
+                const ws = server.focused_workspace;
+                if (ws.layout == .floating) {
+                    ws.layout = ws.prev_layout orelse .{ .ribbon = .{} };
+                    ws.prev_layout = null;
+                    ws.scroll_offset_x = 0;
+                } else {
+                    ws.prev_layout = ws.layout;
+                    ws.layout = .{ .floating = .{} };
+                    const box = ws.getUsableArea();
+                    var offset: i32 = 0;
+                    var it = ws.views.link.next;
+                    while (it != &ws.views.link) : (it = it.?.next) {
+                        const view: *View.Toplevel = @fieldParentPtr("link", it.?);
+                        if (!view.mapped) continue;
+                        if (view.x == 0 and view.y == 0) {
+                            view.x = box.x + offset;
+                            view.y = box.y + offset;
+                            offset += 30;
+                        }
+                    }
+                }
+                ws.arrange();
+            },
+            .toggle_tiling_layout => {
+                const ws = server.focused_workspace;
+                if (ws.layout == .tiling) {
+                    ws.layout = ws.prev_layout orelse .{ .ribbon = .{} };
+                    ws.prev_layout = null;
+                    ws.scroll_offset_x = 0;
+                } else {
+                    ws.prev_layout = ws.layout;
+                    ws.layout = .{ .tiling = .{} };
+                }
+                ws.arrange();
+            },
+            .toggle_ribbon_layout => {
+                const ws = server.focused_workspace;
+                if (ws.layout == .ribbon) {
+                    ws.layout = ws.prev_layout orelse .{ .tiling = .{} };
+                    ws.prev_layout = null;
+                } else {
+                    ws.prev_layout = ws.layout;
+                    ws.layout = .{ .ribbon = .{} };
+                    ws.scroll_offset_x = 0;
+                }
+                ws.arrange();
+            },
             .smart_view => {
                 const ws = server.focused_workspace;
                 ws.layout = if (ws.layout == .smart_view) .{ .ribbon = .{} } else .{ .smart_view = .{} };
@@ -1306,9 +1354,12 @@ pub const Server = struct {
                     .toggle_maximize => t.setMaximized(!t.is_maximized),
                     .toggle_fullscreen => t.setFullscreen(!t.is_fullscreen),
                     .toggle_floating => {
-                        t.is_floating = !t.is_floating;
-                        if (t.is_floating) {
-                            t.scene_tree.node.raiseToTop();
+                        // In floating layout mode, all windows are already floating — no-op
+                        if (t.workspace.layout != .floating) {
+                            t.is_floating = !t.is_floating;
+                            if (t.is_floating) {
+                                t.scene_tree.node.raiseToTop();
+                            }
                         }
                     },
                     else => unreachable,

@@ -32,6 +32,9 @@ pub const Action = enum {
     toggle_maximize,
     toggle_fullscreen,
     toggle_floating,
+    toggle_floating_layout,
+    toggle_tiling_layout,
+    toggle_ribbon_layout,
 };
 
 pub const DisplayMode = enum {
