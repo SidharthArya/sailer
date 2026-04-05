@@ -95,6 +95,7 @@ pub fn build(b: *std.Build) void {
     scanner.addSystemProtocol("staging/content-type/content-type-v1.xml");
     scanner.addSystemProtocol("staging/ext-image-copy-capture/ext-image-copy-capture-v1.xml");
     scanner.addCustomProtocol(b.path("protocols/wlr-layer-shell-unstable-v1.xml"));
+    scanner.addCustomProtocol(b.path("protocols/virtual-keyboard-unstable-v1.xml"));
 
     scanner.generate("wl_compositor", 4);
     scanner.generate("wl_subcompositor", 1);
@@ -104,6 +105,7 @@ pub fn build(b: *std.Build) void {
     scanner.generate("wl_data_device_manager", 3);
     scanner.generate("xdg_wm_base", 2);
     scanner.generate("zwlr_layer_shell_v1", 4);
+    scanner.generate("zwp_virtual_keyboard_manager_v1", 1);
     scanner.generate("ext_session_lock_manager_v1", 1);
     scanner.generate("ext_image_copy_capture_manager_v1", 1);
     scanner.generate("zwp_pointer_gestures_v1", 3);
@@ -159,6 +161,18 @@ pub fn build(b: *std.Build) void {
     // step). By default the install prefix is `zig-out/` but can be overridden
     // by passing `--prefix` or `-p`.
     b.installArtifact(exe);
+
+    // sailer-mcp: standalone MCP bridge binary
+    const mcp_exe = b.addExecutable(.{
+        .name = "sailer-mcp",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/mcp_main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    mcp_exe.linkLibC();
+    b.installArtifact(mcp_exe);
 
     // This creates a top level step. Top level steps have a name and can be
     // invoked by name when running `zig build` (e.g. `zig build run`).

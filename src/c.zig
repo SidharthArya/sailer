@@ -10,6 +10,8 @@ pub const c = @cImport({
     @cInclude("wlr/types/wlr_output.h");
     @cInclude("wlr/render/wlr_renderer.h");
     @cInclude("wlr/util/box.h");
+    @cInclude("wlr/types/wlr_damage_ring.h");
+    @cInclude("xkbcommon/xkbcommon.h");
     @cInclude("wayland-server-core.h");
     @cInclude("drm_fourcc.h");
     @cInclude("time.h");

@@ -54,36 +54,44 @@ pub const BarConfig = struct {
     refresh_interval: u32 = 10000, // ms
 };
 
+/// Resolve a key name string to an xkb keysym, trying exact match first then lowercase.
+pub fn keysymFromName(key: []const u8) xkb.Keysym {
+    if (key.len == 0) return .NoSymbol;
+    const namez = std.heap.c_allocator.dupeZ(u8, key) catch return .NoSymbol;
+    defer std.heap.c_allocator.free(namez);
+    var sym = xkb.Keysym.fromName(namez, .no_flags);
+    if (sym == .NoSymbol) {
+        const lower = std.ascii.allocLowerString(std.heap.c_allocator, key) catch return .NoSymbol;
+        defer std.heap.c_allocator.free(lower);
+        const lowerz = std.heap.c_allocator.dupeZ(u8, lower) catch return .NoSymbol;
+        defer std.heap.c_allocator.free(lowerz);
+        sym = xkb.Keysym.fromName(lowerz, .no_flags);
+    }
+    return sym;
+}
+
+/// Resolve a slice of modifier name strings to a ModifierMask.
+pub fn modifiersFromNames(modifiers: []const []const u8) wlr.Keyboard.ModifierMask {
+    var mask = wlr.Keyboard.ModifierMask{};
+    for (modifiers) |m| {
+        if (std.ascii.eqlIgnoreCase(m, "ctrl")) mask.ctrl = true;
+        if (std.ascii.eqlIgnoreCase(m, "shift")) mask.shift = true;
+        if (std.ascii.eqlIgnoreCase(m, "alt") or std.ascii.eqlIgnoreCase(m, "mod1")) mask.alt = true;
+        if (std.ascii.eqlIgnoreCase(m, "logo") or std.ascii.eqlIgnoreCase(m, "mod4") or std.ascii.eqlIgnoreCase(m, "super")) mask.logo = true;
+    }
+    return mask;
+}
+
 pub const SequenceKey = struct {
     key: []const u8 = "",
     modifiers: []const []const u8 = &.{},
 
     pub fn getKeysym(self: SequenceKey) xkb.Keysym {
-        if (self.key.len == 0) return .NoSymbol;
-        const namez = std.heap.c_allocator.dupeZ(u8, self.key) catch return .NoSymbol;
-        defer std.heap.c_allocator.free(namez);
-        
-        var sym = xkb.Keysym.fromName(namez, .no_flags);
-        if (sym == .NoSymbol) {
-            // TODO: getKeysym is duplicated verbatim in both SequenceKey and Keybinding — extract to a shared helper.
-            const lower_name = std.ascii.allocLowerString(std.heap.c_allocator, self.key) catch return .NoSymbol;
-            defer std.heap.c_allocator.free(lower_name);
-            const lower_namez = std.heap.c_allocator.dupeZ(u8, lower_name) catch return .NoSymbol;
-            defer std.heap.c_allocator.free(lower_namez);
-            sym = xkb.Keysym.fromName(lower_namez, .no_flags);
-        }
-        return sym;
+        return keysymFromName(self.key);
     }
 
     pub fn getModifiers(self: SequenceKey) wlr.Keyboard.ModifierMask {
-        var mask = wlr.Keyboard.ModifierMask{};
-        for (self.modifiers) |m| {
-            if (std.ascii.eqlIgnoreCase(m, "ctrl")) mask.ctrl = true;
-            if (std.ascii.eqlIgnoreCase(m, "shift")) mask.shift = true;
-            if (std.ascii.eqlIgnoreCase(m, "alt") or std.ascii.eqlIgnoreCase(m, "mod1")) mask.alt = true;
-            if (std.ascii.eqlIgnoreCase(m, "logo") or std.ascii.eqlIgnoreCase(m, "mod4") or std.ascii.eqlIgnoreCase(m, "super")) mask.logo = true;
-        }
-        return mask;
+        return modifiersFromNames(self.modifiers);
     }
 };
 
@@ -97,31 +105,11 @@ pub const Keybinding = struct {
     sequence: ?[]SequenceKey = null,
 
     pub fn getKeysym(self: Keybinding) xkb.Keysym {
-        if (self.key.len == 0) return .NoSymbol;
-        const namez = std.heap.c_allocator.dupeZ(u8, self.key) catch return .NoSymbol;
-        defer std.heap.c_allocator.free(namez);
-        
-        var sym = xkb.Keysym.fromName(namez, .no_flags);
-        if (sym == .NoSymbol) {
-            // Try lowercase if case-sensitive lookup fails
-            const lower_name = std.ascii.allocLowerString(std.heap.c_allocator, self.key) catch return .NoSymbol;
-            defer std.heap.c_allocator.free(lower_name);
-            const lower_namez = std.heap.c_allocator.dupeZ(u8, lower_name) catch return .NoSymbol;
-            defer std.heap.c_allocator.free(lower_namez);
-            sym = xkb.Keysym.fromName(lower_namez, .no_flags);
-        }
-        return sym;
+        return keysymFromName(self.key);
     }
 
     pub fn getModifiers(self: Keybinding) wlr.Keyboard.ModifierMask {
-        var mask = wlr.Keyboard.ModifierMask{};
-        for (self.modifiers) |m| {
-            if (std.ascii.eqlIgnoreCase(m, "ctrl")) mask.ctrl = true;
-            if (std.ascii.eqlIgnoreCase(m, "shift")) mask.shift = true;
-            if (std.ascii.eqlIgnoreCase(m, "alt") or std.ascii.eqlIgnoreCase(m, "mod1")) mask.alt = true;
-            if (std.ascii.eqlIgnoreCase(m, "logo") or std.ascii.eqlIgnoreCase(m, "mod4") or std.ascii.eqlIgnoreCase(m, "super")) mask.logo = true;
-        }
-        return mask;
+        return modifiersFromNames(self.modifiers);
     }
 };
 
@@ -132,6 +120,8 @@ pub const Config = struct {
     gap: i32 = 20,
     focus_on_close: FocusOnClose = .previous,
     bar: BarConfig = .{},
+    repeat_rate: u32 = 25,
+    repeat_delay: u32 = 600,
 
     pub fn load(allocator: std.mem.Allocator) !Config {
         const home = std.process.getEnvVarOwned(allocator, "HOME") catch return error.NoHome;
@@ -217,6 +207,8 @@ pub const Config = struct {
             \\  "split_ratio": 0.5,
             \\  "gap": 8,
             \\  "focus_on_close": "previous",
+            \\  "repeat_rate": 25,
+            \\  "repeat_delay": 600,
             \\  "bar": {
             \\    "enabled": true,
             \\    "exclusive": true,
