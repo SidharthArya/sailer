@@ -1,0 +1,196 @@
+# sailer sample configuration
+# Place this file at ~/.config/sailer/config.yaml
+
+font: /usr/share/fonts/TTF/DejaVuSans.ttf
+gap: 8
+split_ratio: 0.5
+focus_on_close: previous
+repeat_rate: 25
+repeat_delay: 600
+
+bar:
+  enabled: true
+  exclusive: true
+  height: 32
+  font_size: 11
+  refresh_interval: 10000
+
+keybindings:
+
+  # --- Session ---
+  - key: q
+    modifiers: [Ctrl, Shift]
+    action: terminate
+
+  # --- Launch ---
+  - key: Return
+    modifiers: [Ctrl]
+    action: spawn
+    command: foot
+
+  - key: Space
+    modifiers: [Ctrl]
+    action: spawn
+    command: fuzzel
+
+  # --- Window management ---
+  - key: c
+    modifiers: [Ctrl, Shift]
+    action: close
+
+  - key: m
+    modifiers: [Ctrl]
+    action: toggle_maximize
+
+  - key: f
+    modifiers: [Ctrl]
+    action: toggle_fullscreen
+
+  # Toggle focused window between tiled and floating (not available in floating layout)
+  - key: f
+    modifiers: [Ctrl, Shift]
+    action: toggle_floating
+
+  # --- Focus ---
+  - key: h
+    modifiers: [Ctrl]
+    action: focus_left
+
+  - key: l
+    modifiers: [Ctrl]
+    action: focus_right
+
+  # --- Resize ---
+  - key: h
+    modifiers: [Ctrl, Shift]
+    action: resize_shrink
+
+  - key: l
+    modifiers: [Ctrl, Shift]
+    action: resize_expand
+
+  # --- Reorder ---
+  - key: j
+    modifiers: [Ctrl, Shift]
+    action: reorder_left
+
+  - key: k
+    modifiers: [Ctrl, Shift]
+    action: reorder_right
+
+  # --- Move (floating windows) ---
+  - key: h
+    modifiers: [Ctrl, Alt]
+    action: move_left
+
+  - key: l
+    modifiers: [Ctrl, Alt]
+    action: move_right
+
+  - key: k
+    modifiers: [Ctrl, Alt]
+    action: move_up
+
+  - key: j
+    modifiers: [Ctrl, Alt]
+    action: move_down
+
+  # --- Layouts ---
+  # Toggle ribbon layout (restores previous layout on second press)
+  - key: r
+    modifiers: [Ctrl, Alt]
+    action: toggle_ribbon_layout
+
+  # Toggle tiling layout
+  - key: t
+    modifiers: [Ctrl, Alt]
+    action: toggle_tiling_layout
+
+  # Toggle floating layout (all windows float; individual toggle_floating disabled)
+  - key: f
+    modifiers: [Ctrl, Alt]
+    action: toggle_floating_layout
+
+  # SmartView layout
+  - key: s
+    modifiers: [Ctrl, Alt]
+    action: smart_view
+
+  # --- Workspaces ---
+  - key: '1'
+    modifiers: [Ctrl]
+    action: switch_workspace
+    workspace_index: 1
+
+  - key: '2'
+    modifiers: [Ctrl]
+    action: switch_workspace
+    workspace_index: 2
+
+  - key: '3'
+    modifiers: [Ctrl]
+    action: switch_workspace
+    workspace_index: 3
+
+  - key: '4'
+    modifiers: [Ctrl]
+    action: switch_workspace
+    workspace_index: 4
+
+  - key: '5'
+    modifiers: [Ctrl]
+    action: switch_workspace
+    workspace_index: 5
+
+  - key: '6'
+    modifiers: [Ctrl]
+    action: switch_workspace
+    workspace_index: 6
+
+  - key: '7'
+    modifiers: [Ctrl]
+    action: switch_workspace
+    workspace_index: 7
+
+  - key: '8'
+    modifiers: [Ctrl]
+    action: switch_workspace
+    workspace_index: 8
+
+  - key: '9'
+    modifiers: [Ctrl]
+    action: switch_workspace
+    workspace_index: 9
+
+  # --- Outputs ---
+  - key: o
+    modifiers: [Ctrl, Alt]
+    action: focus_output
+
+  - key: m
+    modifiers: [Ctrl, Alt]
+    action: set_display_mode
+    display_mode: mirror
+
+  - key: e
+    modifiers: [Ctrl, Alt]
+    action: set_display_mode
+    display_mode: spanned
+
+  - key: d
+    modifiers: [Ctrl, Alt]
+    action: set_display_mode
+    display_mode: discrete
+
+  - key: c
+    modifiers: [Ctrl, Alt]
+    action: cycle_display_mode
+
+  # --- Screenshot ---
+  - key: p
+    modifiers: [Ctrl]
+    action: get_screenshot
+
+  - key: p
+    modifiers: [Ctrl, Shift]
+    action: screenshot
