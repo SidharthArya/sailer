@@ -4,72 +4,70 @@ const wlr = @import("wlroots");
 const xkb = @import("xkbcommon");
 // No Server import to break circular dependency
 
-pub const KeyboardDevice = struct {
+pub const KeyboardDevice = extern struct {
     server: *anyopaque,
-    link: wl.list.Link = undefined,
+    link: wl.list.Link,
     device: *wlr.InputDevice,
 
-    modifiers: wl.Listener(*wlr.Keyboard) = undefined,
-    key: wl.Listener(*wlr.Keyboard.event.Key) = undefined,
-    destroy: wl.Listener(*wlr.InputDevice) = undefined,
+    modifiers: wl.Listener(*wlr.Keyboard),
+    key: wl.Listener(*wlr.Keyboard.event.Key),
+    destroy: wl.Listener(*wlr.InputDevice),
+
 
     pub fn create(server: *anyopaque, device: *wlr.InputDevice) !void {
         const keyboard = try std.heap.c_allocator.create(KeyboardDevice);
         errdefer std.heap.c_allocator.destroy(keyboard);
 
-        keyboard.* = .{
-            .server = server,
-            .device = device,
-        };
+        keyboard.server = server;
+        keyboard.device = device;
+        keyboard.link = .{ .next = null, .prev = null };
+        keyboard.modifiers = .init(handleModifiers);
+        keyboard.key = .init(handleKey);
+        keyboard.destroy = .init(handleDestroy);
 
-        const context = xkb.Context.new(.no_flags) orelse return error.ContextFailed;
-        defer context.unref();
-        const keymap = xkb.Keymap.newFromNames(context, null, .no_flags) orelse return error.KeymapFailed;
-        defer keymap.unref();
+
+        device.data = keyboard;
+
+        const is_virtual = device.getVirtualKeyboard() != null;
+        const name = if (device.name) |n| std.mem.span(n) else "unnamed";
 
         const wlr_keyboard = device.toKeyboard();
-        if (!wlr_keyboard.setKeymap(keymap)) return error.SetKeymapFailed;
-        wlr_keyboard.setRepeatInfo(25, 600);
-        // TODO: Make key repeat rate and delay configurable via Config instead of hardcoded (25 rate, 600ms delay).
+        const Server = @import("Server.zig").Server;
+        const s: *Server = @ptrCast(@alignCast(server));
 
-        keyboard.modifiers = .{ .notify = @ptrCast(&handleModifiersC), .link = undefined };
-        keyboard.key = .{ .notify = @ptrCast(&handleKeyC), .link = undefined };
-        keyboard.destroy = .{ .notify = @ptrCast(&handleDestroyC), .link = undefined };
-        // TODO: The C-callback trampolines (handleModifiersC, handleKeyC, handleDestroyC) exist to work around
-        //       a circular import. Consider restructuring to use Zig-native listeners directly.
+        if (is_virtual) {
+            std.log.info("Keyboard {*} {s} is VIRTUAL, skipping default keymap", .{ device, name });
+        } else {
+            const context = xkb.Context.new(.no_flags) orelse return error.ContextFailed;
+            defer context.unref();
+            const keymap = xkb.Keymap.newFromNames(context, null, .no_flags) orelse return error.KeymapFailed;
+            defer keymap.unref();
+            if (!wlr_keyboard.setKeymap(keymap)) return error.SetKeymapFailed;
+            wlr_keyboard.setRepeatInfo(@intCast(s.config.repeat_rate), @intCast(s.config.repeat_delay));
+        }
 
         wlr_keyboard.events.modifiers.add(&keyboard.modifiers);
         wlr_keyboard.events.key.add(&keyboard.key);
         device.events.destroy.add(&keyboard.destroy);
 
-        const Server = @import("Server.zig").Server;
-        const s: *Server = @ptrCast(@alignCast(server));
         wlr.Seat.setKeyboard(s.seat, wlr_keyboard);
         s.keyboards.append(keyboard);
     }
 };
 
-fn handleModifiersC(listener: *wl.Listener(*wlr.Keyboard), data: ?*anyopaque) callconv(.c) void {
-    const wlr_keyboard: *wlr.Keyboard = @ptrCast(@alignCast(data.?));
-    handleModifiers(listener, wlr_keyboard);
-}
 
 fn handleModifiers(listener: *wl.Listener(*wlr.Keyboard), wlr_keyboard: *wlr.Keyboard) void {
-    const Server = @import("Server.zig").Server;
     const keyboard: *KeyboardDevice = @fieldParentPtr("modifiers", listener);
+    const Server = @import("Server.zig").Server;
     const server: *Server = @ptrCast(@alignCast(keyboard.server));
     wlr.Seat.setKeyboard(server.seat, wlr_keyboard);
     wlr.Seat.keyboardNotifyModifiers(server.seat, &wlr_keyboard.modifiers);
 }
 
-fn handleKeyC(listener: *wl.Listener(*wlr.Keyboard.event.Key), data: ?*anyopaque) callconv(.c) void {
-    const event: *wlr.Keyboard.event.Key = @ptrCast(@alignCast(data.?));
-    handleKey(listener, event);
-}
-
 fn handleKey(listener: *wl.Listener(*wlr.Keyboard.event.Key), event: *wlr.Keyboard.event.Key) void {
-    const Server = @import("Server.zig").Server;
     const keyboard: *KeyboardDevice = @fieldParentPtr("key", listener);
+
+    const Server = @import("Server.zig").Server;
     const server: *Server = @ptrCast(@alignCast(keyboard.server));
     const wlr_keyboard = keyboard.device.toKeyboard();
 
@@ -77,7 +75,6 @@ fn handleKey(listener: *wl.Listener(*wlr.Keyboard.event.Key), event: *wlr.Keyboa
     const keycode = event.keycode + 8;
 
     var handled = false;
-    const wlr_keyboard_ptr = wlr_keyboard; // help with capture
     if (event.state == .pressed) {
         if (wlr_keyboard.xkb_state) |state| {
             const mods = wlr_keyboard.getModifiers();
@@ -91,7 +88,6 @@ fn handleKey(listener: *wl.Listener(*wlr.Keyboard.event.Key), event: *wlr.Keyboa
                 }
                 const s = @intFromEnum(sym);
                 if (s >= 0x1008FE01 and s <= 0x1008FE0C) { // XF86Switch_VT_1 through XF86Switch_VT_12
-                    // TODO: Use named XF86 keysym constants instead of raw hex range for clarity.
                     if (server.session) |session| {
                         session.changeVt(@intCast(s - 0x1008FE01 + 1)) catch {};
                         return;
@@ -139,7 +135,7 @@ fn handleKey(listener: *wl.Listener(*wlr.Keyboard.event.Key), event: *wlr.Keyboa
     }
 
     if (!handled) {
-        wlr.Seat.setKeyboard(server.seat, wlr_keyboard_ptr);
+        wlr.Seat.setKeyboard(server.seat, wlr_keyboard);
         server.seat.keyboardNotifyKey(event.time_msec, event.keycode, event.state);
     }
 }
@@ -152,19 +148,39 @@ fn isModifier(sym: xkb.Keysym) bool {
         s == xkb.Keysym.Super_L or s == xkb.Keysym.Super_R;
 }
 
-fn handleDestroyC(listener: *wl.Listener(*wlr.InputDevice), data: ?*anyopaque) callconv(.c) void {
-    const device: *wlr.InputDevice = @ptrCast(@alignCast(data.?));
-    handleDestroy(listener, device);
-}
-
-fn handleDestroy(listener: *wl.Listener(*wlr.InputDevice), _: *wlr.InputDevice) void {
+fn handleDestroy(listener: *wl.Listener(*wlr.InputDevice), device: *wlr.InputDevice) void {
     const keyboard: *KeyboardDevice = @fieldParentPtr("destroy", listener);
 
-    keyboard.link.remove();
+    const Server = @import("Server.zig").Server;
+    const server: *Server = @ptrCast(@alignCast(keyboard.server));
+    std.debug.print("Destroying keyboard device {*} ({s})\n", .{ device, if (device.name) |n| std.mem.span(n) else "unnamed" });
 
+    // Remove from deduplication map so the pointer can be reused if needed
+    _ = server.device_map.remove(device);
+
+    keyboard.link.remove();
     keyboard.modifiers.link.remove();
     keyboard.key.link.remove();
     keyboard.destroy.link.remove();
 
+    if (device.data == @as(?*anyopaque, keyboard)) {
+        device.data = null;
+    }
+
+    // If this was the active keyboard on the seat, restore to the first remaining keyboard.
+    if (wlr.Seat.getKeyboard(server.seat) == device.toKeyboard()) {
+        wlr.Seat.setKeyboard(server.seat, null);
+        var it = server.keyboards.link.next;
+        while (it != &server.keyboards.link) : (it = it.?.next) {
+            const remaining: *KeyboardDevice = @fieldParentPtr("link", it.?);
+            if (remaining != keyboard) {
+                wlr.Seat.setKeyboard(server.seat, remaining.device.toKeyboard());
+                break;
+            }
+        }
+    }
+
+    server.focusTopWindow();
     std.heap.c_allocator.destroy(keyboard);
 }
+

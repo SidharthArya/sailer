@@ -9,25 +9,34 @@ pub const Output = struct {
     server: *Server,
     wlr_output: *wlr.Output,
 
-    link: wl.list.Link = undefined,
-    frame: wl.Listener(*wlr.Output) = .init(Output.handleFrame),
-    request_state: wl.Listener(*wlr.Output.event.RequestState) = .init(Output.handleRequestState),
-    destroy: wl.Listener(*wlr.Output) = .init(Output.handleDestroy),
+    link: wl.list.Link = .{ .next = null, .prev = null },
     background: ?*wlr.SceneRect = null,
     bar: ?*Bar = null,
+    listeners: Listeners,
+
+    pub const Listeners = extern struct {
+        frame: wl.Listener(*wlr.Output),
+        request_state: wl.Listener(*wlr.Output.event.RequestState),
+        destroy: wl.Listener(*wlr.Output),
+    };
 
     pub fn create(server: *Server, wlr_output: *wlr.Output) !*Output {
         const output = try std.heap.c_allocator.create(Output);
-        output.* = .{
-            .server = server,
-            .wlr_output = wlr_output,
-        };
+        output.server = server;
+        output.wlr_output = wlr_output;
+        output.link = .{ .next = null, .prev = null };
+        output.background = null;
+        output.bar = null;
 
-        // 1. Register our listeners FIRST (at the head of the signal list in C libwayland).
-        // This matches the order in tinywl.zig and ensures we are at the head of the list.
-        wlr_output.events.frame.add(&output.frame);
-        wlr_output.events.request_state.add(&output.request_state);
-        wlr_output.events.destroy.add(&output.destroy);
+        output.listeners.frame = .init(Output.handleFrame);
+        output.listeners.request_state = .init(Output.handleRequestState);
+        output.listeners.destroy = .init(Output.handleDestroy);
+
+        // 1. Register our listeners FIRST
+        wlr_output.events.frame.add(&output.listeners.frame);
+        wlr_output.events.request_state.add(&output.listeners.request_state);
+        wlr_output.events.destroy.add(&output.listeners.destroy);
+
 
         // CRITICAL: Create the Wayland global for this output so that clients can see it.
         // It must be created after initRender has set up the renderer.
@@ -58,7 +67,9 @@ pub const Output = struct {
     }
 
     fn handleFrame(listener: *wl.Listener(*wlr.Output), _: *wlr.Output) void {
-        const output: *Output = @fieldParentPtr("frame", listener);
+        const listeners: *Output.Listeners = @fieldParentPtr("frame", listener);
+        const output: *Output = @fieldParentPtr("listeners", listeners);
+
 
         const scene_output = output.server.scene.getSceneOutput(output.wlr_output) orelse {
             var state = wlr.Output.State.init();
@@ -74,12 +85,9 @@ pub const Output = struct {
             bg.node.setPosition(box.x, box.y);
         }
 
-        //        if (output.bar) |bar| bar.update();
-        // TODO: Bar update is commented out here — it's driven by a timer in Server instead.
-        //       Decide on one approach and remove the dead code.
+        // Bar is updated by the timer in Server.handleBarTimer, not per-frame.
 
-        if (!scene_output.commit(null)) {
-            std.log.err("scene_output.commit failed on {s}", .{output.wlr_output.name});
+        if (!scene_output.commit(null)) {            std.log.err("scene_output.commit failed on {s}", .{output.wlr_output.name});
             return;
         }
 
@@ -91,7 +99,9 @@ pub const Output = struct {
         listener: *wl.Listener(*wlr.Output.event.RequestState),
         event: *wlr.Output.event.RequestState,
     ) void {
-        const output: *Output = @fieldParentPtr("request_state", listener);
+        const listeners: *Output.Listeners = @fieldParentPtr("request_state", listener);
+        const output: *Output = @fieldParentPtr("listeners", listeners);
+
         _ = output.wlr_output.commitState(event.state);
         output.server.updateLayout();
 
@@ -106,14 +116,17 @@ pub const Output = struct {
     }
 
     fn handleDestroy(listener: *wl.Listener(*wlr.Output), _: *wlr.Output) void {
-        const output: *Output = @fieldParentPtr("destroy", listener);
+        const listeners: *Output.Listeners = @fieldParentPtr("destroy", listener);
+        const output: *Output = @fieldParentPtr("listeners", listeners);
+
         const server = output.server;
 
         std.log.info("Output '{s}' destroyed", .{output.wlr_output.name});
 
-        output.destroy.link.remove();
-        output.frame.link.remove();
-        output.request_state.link.remove();
+        output.listeners.destroy.link.remove();
+        output.listeners.frame.link.remove();
+        output.listeners.request_state.link.remove();
+
         output.link.remove();
 
         for (server.workspaces) |ws| {

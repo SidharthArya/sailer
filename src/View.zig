@@ -37,17 +37,66 @@ pub const Toplevel = struct {
     border_bottom: ?*wlr.SceneRect = null,
     border_left: ?*wlr.SceneRect = null,
     border_right: ?*wlr.SceneRect = null,
-    
+    listeners: Listeners,
 
-    commit: wl.Listener(*wlr.Surface) = .init(Toplevel.handleCommit),
-    map: wl.Listener(void) = .init(Toplevel.handleMap),
-    unmap: wl.Listener(void) = .init(Toplevel.handleUnmap),
-    destroy: wl.Listener(void) = .init(Toplevel.handleDestroy),
-    request_move: wl.Listener(*wlr.XdgToplevel.event.Move) = .init(Toplevel.handleRequestMove),
-    request_resize: wl.Listener(*wlr.XdgToplevel.event.Resize) = .init(Toplevel.handleRequestResize),
-    request_maximize: wl.Listener(void) = .init(Toplevel.handleRequestMaximize),
-    request_fullscreen: wl.Listener(void) = .init(Toplevel.handleRequestFullscreen),
-    request_show_window_menu: wl.Listener(*wlr.XdgToplevel.event.ShowWindowMenu) = .init(Toplevel.handleRequestShowWindowMenu),
+    pub const Listeners = struct {
+        commit: wl.Listener(*wlr.Surface),
+        map: wl.Listener(void),
+        unmap: wl.Listener(void),
+        destroy: wl.Listener(void),
+        request_move: wl.Listener(*wlr.XdgToplevel.event.Move),
+        request_resize: wl.Listener(*wlr.XdgToplevel.event.Resize),
+        request_maximize: wl.Listener(void),
+        request_fullscreen: wl.Listener(void),
+        request_show_window_menu: wl.Listener(*wlr.XdgToplevel.event.ShowWindowMenu),
+    };
+
+    pub fn create(server: *Server, xdg_toplevel: *wlr.XdgToplevel) !*Toplevel {
+        const toplevel = try std.heap.c_allocator.create(Toplevel);
+        toplevel.* = .{
+            .server = server,
+            .workspace = server.focused_workspace,
+            .xdg_toplevel = xdg_toplevel,
+            .scene_tree = undefined,
+            .xdg_surface_tree = undefined,
+            .listeners = undefined,
+            .border_width = 2,
+        };
+
+        const scene_tree = server.window_tree.createSceneTree() catch return error.SceneTreeCreationFailed;
+        toplevel.scene_tree = scene_tree;
+        toplevel.xdg_surface_tree = scene_tree.createSceneXdgSurface(xdg_toplevel.base) catch return error.SceneTreeCreationFailed;
+
+        toplevel.border_top = scene_tree.createSceneRect(0, 0, &toplevel.inactive_border_color) catch null;
+        toplevel.border_bottom = scene_tree.createSceneRect(0, 0, &toplevel.inactive_border_color) catch null;
+        toplevel.border_left = scene_tree.createSceneRect(0, 0, &toplevel.inactive_border_color) catch null;
+        toplevel.border_right = scene_tree.createSceneRect(0, 0, &toplevel.inactive_border_color) catch null;
+
+        toplevel.listeners.commit = .init(handleCommit);
+        toplevel.listeners.map = .init(handleMap);
+        toplevel.listeners.unmap = .init(handleUnmap);
+        toplevel.listeners.destroy = .init(handleDestroy);
+        toplevel.listeners.request_move = .init(handleRequestMove);
+        toplevel.listeners.request_resize = .init(handleRequestResize);
+        toplevel.listeners.request_maximize = .init(handleRequestMaximize);
+        toplevel.listeners.request_fullscreen = .init(handleRequestFullscreen);
+        toplevel.listeners.request_show_window_menu = .init(handleRequestShowWindowMenu);
+
+        xdg_toplevel.base.surface.events.commit.add(&toplevel.listeners.commit);
+        xdg_toplevel.base.surface.events.map.add(&toplevel.listeners.map);
+        xdg_toplevel.base.surface.events.unmap.add(&toplevel.listeners.unmap);
+        xdg_toplevel.events.destroy.add(&toplevel.listeners.destroy);
+        xdg_toplevel.events.request_move.add(&toplevel.listeners.request_move);
+        xdg_toplevel.events.request_resize.add(&toplevel.listeners.request_resize);
+        xdg_toplevel.events.request_maximize.add(&toplevel.listeners.request_maximize);
+        xdg_toplevel.events.request_fullscreen.add(&toplevel.listeners.request_fullscreen);
+        xdg_toplevel.events.request_show_window_menu.add(&toplevel.listeners.request_show_window_menu);
+
+        toplevel.xdg_toplevel.base.data = toplevel.scene_tree;
+        toplevel.scene_tree.node.data = toplevel;
+
+        return toplevel;
+    }
 
     pub fn updateBorderColor(self: *Toplevel, color: *const [4]f32) void {
         if (self.border_top) |r| r.setColor(color);
@@ -59,10 +108,8 @@ pub const Toplevel = struct {
     pub fn updateLayout(self: *Toplevel, width: i32, height: i32) void {
         const bw = if (self.is_fullscreen) 0 else self.border_width;
 
-        // Position surface inside borders
         self.xdg_surface_tree.node.setPosition(bw, bw);
 
-        // Update borders positions and sizes
         if (self.border_top) |r| {
             r.setSize(width - 2 * bw, bw);
             r.node.setPosition(bw, 0);
@@ -82,20 +129,24 @@ pub const Toplevel = struct {
     }
 
     fn handleCommit(listener: *wl.Listener(*wlr.Surface), surface: *wlr.Surface) void {
-        const toplevel: *Toplevel = @fieldParentPtr("commit", listener);
+        const listeners: *Listeners = @fieldParentPtr("commit", listener);
+        const toplevel: *Toplevel = @fieldParentPtr("listeners", listeners);
+
         if (toplevel.xdg_toplevel.base.initial_commit) {
             std.log.debug("Initial commit for: {s}", .{@as([*:0]const u8, @ptrCast(toplevel.xdg_toplevel.title orelse "unnamed"))});
             _ = toplevel.xdg_toplevel.base.scheduleConfigure();
         }
 
-        // Update foreign toplevel handle
+        if (toplevel.mapped) {
+            toplevel.workspace.arrange();
+        }
+
         if (toplevel.foreign_toplevel) |handle| {
             if (toplevel.xdg_toplevel.title) |title| handle.setTitle(title);
             if (toplevel.xdg_toplevel.app_id) |app_id| handle.setAppId(app_id);
             handle.setMaximized(toplevel.is_maximized);
             handle.setFullscreen(toplevel.is_fullscreen);
             handle.setActivated(toplevel.server.seat.keyboard_state.focused_surface == surface);
-            // TODO: setMinimized is not called — add minimized state tracking if needed.
             if (toplevel.workspace.visible_on) |output| {
                 if (toplevel.last_output != output.wlr_output) {
                     if (toplevel.last_output) |lo| handle.outputLeave(lo);
@@ -110,15 +161,25 @@ pub const Toplevel = struct {
     }
 
     fn handleMap(listener: *wl.Listener(void)) void {
-        const toplevel: *Toplevel = @fieldParentPtr("map", listener);
+        const listeners: *Listeners = @fieldParentPtr("map", listener);
+        const toplevel: *Toplevel = @fieldParentPtr("listeners", listeners);
+
         std.log.debug("View map: {s}", .{@as([*:0]const u8, @ptrCast(toplevel.xdg_toplevel.title orelse "unnamed"))});
         toplevel.mapped = true;
+        toplevel.updateBorderColor(&toplevel.inactive_border_color);
+        if (toplevel.border_top) |r| r.node.raiseToTop();
+        if (toplevel.border_bottom) |r| r.node.raiseToTop();
+        if (toplevel.border_left) |r| r.node.raiseToTop();
+        if (toplevel.border_right) |r| r.node.raiseToTop();
+
         toplevel.workspace.arrange();
         toplevel.server.focusView(toplevel, toplevel.xdg_toplevel.base.surface);
     }
 
     fn handleUnmap(listener: *wl.Listener(void)) void {
-        const toplevel: *Toplevel = @fieldParentPtr("unmap", listener);
+        const listeners: *Listeners = @fieldParentPtr("unmap", listener);
+        const toplevel: *Toplevel = @fieldParentPtr("listeners", listeners);
+
         std.log.debug("View unmap: {s}", .{@as([*:0]const u8, @ptrCast(toplevel.xdg_toplevel.title orelse "unnamed"))});
         if (toplevel.server.grabbed_view == toplevel) {
             toplevel.server.grabbed_view = null;
@@ -142,6 +203,8 @@ pub const Toplevel = struct {
                     var it = ws.focus_history.link.next;
                     while (it != &ws.focus_history.link) : (it = it.?.next) {
                         const candidate: *Toplevel = @fieldParentPtr("focus_link", it.?);
+
+
                         if (candidate != toplevel) {
                             next_focus = candidate;
                             break;
@@ -152,13 +215,6 @@ pub const Toplevel = struct {
         }
 
         toplevel.mapped = false;
-        if (ws.layout == .tiling) {
-            if (ws.layout.tiling.root) |root| {
-                if (root.findNodeForView(toplevel)) |node| {
-                    node.remove(std.heap.c_allocator, &ws.layout.tiling.root);
-                }
-            }
-        }
 
         toplevel.link.remove();
         toplevel.focus_link.remove();
@@ -168,24 +224,35 @@ pub const Toplevel = struct {
         if (was_focused) {
             if (next_focus) |nf| {
                 server.focusView(nf, nf.xdg_toplevel.base.surface);
-            } else {
-                wlr.Seat.keyboardNotifyClearFocus(server.seat);
+            } else if (server.output_layout.outputAt(server.cursor.x, server.cursor.y)) |wlr_out| {
+                for (server.workspaces) |ws_iter| {
+                    if (ws_iter.visible_on != null and ws_iter.visible_on.?.wlr_output == wlr_out) {
+                        server.focused_workspace = ws_iter;
+                        wlr.Seat.keyboardNotifyClearFocus(server.seat);
+                        break;
+                    }
+                }
             }
         }
     }
 
     fn handleDestroy(listener: *wl.Listener(void)) void {
-        const toplevel: *Toplevel = @fieldParentPtr("destroy", listener);
+        const listeners: *Listeners = @fieldParentPtr("destroy", listener);
+        const toplevel: *Toplevel = @fieldParentPtr("listeners", listeners);
 
-        toplevel.commit.link.remove();
-        toplevel.map.link.remove();
-        toplevel.unmap.link.remove();
-        toplevel.destroy.link.remove();
-        toplevel.request_move.link.remove();
-        toplevel.request_resize.link.remove();
-        toplevel.request_maximize.link.remove();
-        toplevel.request_fullscreen.link.remove();
-        toplevel.request_show_window_menu.link.remove();
+        // Only remove if not already unmapped
+        if (toplevel.link.next != null) toplevel.link.remove();
+        if (toplevel.focus_link.next != null) toplevel.focus_link.remove();
+
+        toplevel.listeners.commit.link.remove();
+        toplevel.listeners.map.link.remove();
+        toplevel.listeners.unmap.link.remove();
+        toplevel.listeners.destroy.link.remove();
+        toplevel.listeners.request_move.link.remove();
+        toplevel.listeners.request_resize.link.remove();
+        toplevel.listeners.request_maximize.link.remove();
+        toplevel.listeners.request_fullscreen.link.remove();
+        toplevel.listeners.request_show_window_menu.link.remove();
 
         if (toplevel.foreign_toplevel) |handle| handle.destroy();
         toplevel.scene_tree.node.destroy();
@@ -196,7 +263,9 @@ pub const Toplevel = struct {
         listener: *wl.Listener(*wlr.XdgToplevel.event.Move),
         _: *wlr.XdgToplevel.event.Move,
     ) void {
-        const toplevel: *Toplevel = @fieldParentPtr("request_move", listener);
+        const listeners: *Listeners = @fieldParentPtr("request_move", listener);
+        const toplevel: *Toplevel = @fieldParentPtr("listeners", listeners);
+
         if (toplevel.locked) return;
         const server = toplevel.server;
         server.grabbed_view = toplevel;
@@ -209,7 +278,9 @@ pub const Toplevel = struct {
         listener: *wl.Listener(*wlr.XdgToplevel.event.Resize),
         event: *wlr.XdgToplevel.event.Resize,
     ) void {
-        const toplevel: *Toplevel = @fieldParentPtr("request_resize", listener);
+        const listeners: *Listeners = @fieldParentPtr("request_resize", listener);
+        const toplevel: *Toplevel = @fieldParentPtr("listeners", listeners);
+
         if (toplevel.locked) return;
         const server = toplevel.server;
 
@@ -274,12 +345,16 @@ pub const Toplevel = struct {
     }
 
     fn handleRequestMaximize(listener: *wl.Listener(void)) void {
-        const toplevel: *Toplevel = @fieldParentPtr("request_maximize", listener);
+        const listeners: *Listeners = @fieldParentPtr("request_maximize", listener);
+        const toplevel: *Toplevel = @fieldParentPtr("listeners", listeners);
+
         toplevel.setMaximized(toplevel.xdg_toplevel.requested.maximized);
     }
 
     fn handleRequestFullscreen(listener: *wl.Listener(void)) void {
-        const toplevel: *Toplevel = @fieldParentPtr("request_fullscreen", listener);
+        const listeners: *Listeners = @fieldParentPtr("request_fullscreen", listener);
+        const toplevel: *Toplevel = @fieldParentPtr("listeners", listeners);
+
         toplevel.setFullscreen(toplevel.xdg_toplevel.requested.fullscreen);
     }
 
@@ -287,10 +362,11 @@ pub const Toplevel = struct {
         listener: *wl.Listener(*wlr.XdgToplevel.event.ShowWindowMenu),
         event: *wlr.XdgToplevel.event.ShowWindowMenu,
     ) void {
-        const toplevel: *Toplevel = @fieldParentPtr("request_show_window_menu", listener);
+        const listeners: *Listeners = @fieldParentPtr("request_show_window_menu", listener);
+        const toplevel: *Toplevel = @fieldParentPtr("listeners", listeners);
+
         const server = toplevel.server;
 
-        // request_show_window_menu provides coordinates relative to the surface.
         const gx = toplevel.x + event.x;
         const gy = toplevel.y + event.y;
 
@@ -301,22 +377,42 @@ pub const Toplevel = struct {
 pub const Popup = struct {
     xdg_popup: *wlr.XdgPopup,
     scene_tree: *wlr.SceneTree,
+    listeners: Listeners,
 
-    commit: wl.Listener(*wlr.Surface) = .init(Popup.handleCommit),
-    destroy: wl.Listener(void) = .init(Popup.handleDestroy),
+    pub const Listeners = struct {
+        commit: wl.Listener(*wlr.Surface),
+        destroy: wl.Listener(void),
+    };
+
+    pub fn create(xdg_popup: *wlr.XdgPopup, scene_tree: *wlr.SceneTree) !*Popup {
+        const popup = try std.heap.c_allocator.create(Popup);
+        popup.xdg_popup = xdg_popup;
+        popup.scene_tree = scene_tree;
+
+        popup.listeners.commit = .init(handleCommit);
+        popup.listeners.destroy = .init(handleDestroy);
+
+        xdg_popup.base.surface.events.commit.add(&popup.listeners.commit);
+        xdg_popup.events.destroy.add(&popup.listeners.destroy);
+
+        return popup;
+    }
 
     fn handleCommit(listener: *wl.Listener(*wlr.Surface), _: *wlr.Surface) void {
-        const popup: *Popup = @fieldParentPtr("commit", listener);
+        const listeners: *Listeners = @fieldParentPtr("commit", listener);
+        const popup: *Popup = @fieldParentPtr("listeners", listeners);
+
         if (popup.xdg_popup.base.initial_commit) {
             _ = popup.xdg_popup.base.scheduleConfigure();
         }
     }
 
     fn handleDestroy(listener: *wl.Listener(void)) void {
-        const popup: *Popup = @fieldParentPtr("destroy", listener);
+        const listeners: *Listeners = @fieldParentPtr("destroy", listener);
+        const popup: *Popup = @fieldParentPtr("listeners", listeners);
 
-        popup.commit.link.remove();
-        popup.destroy.link.remove();
+        popup.listeners.commit.link.remove();
+        popup.listeners.destroy.link.remove();
 
         popup.scene_tree.node.destroy();
         std.heap.c_allocator.destroy(popup);

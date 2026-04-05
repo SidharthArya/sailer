@@ -15,8 +15,8 @@ const Action = ConfigFile.Action;
 const Keybinding = ConfigFile.Keybinding;
 const layouts = @import("layouts/index.zig");
 const Tiling = @import("layouts/Tiling.zig").Tiling;
-const TilingNode = @import("layouts/Tiling.zig").TilingNode;
 const McpServer = @import("Mcp.zig").McpServer;
+const IpcServer = @import("Ipc.zig").IpcServer;
 const Screenshot = @import("Screenshot.zig").Screenshot;
 const LayerSurface = @import("LayerShell.zig").LayerSurface;
 const Menu = @import("Menu.zig").Menu;
@@ -56,27 +56,21 @@ pub const Server = struct {
     window_tree: *wlr.SceneTree,
     top_tree: *wlr.SceneTree,
     overlay_tree: *wlr.SceneTree,
-    shm: *wlr.Shm,
-    new_output: wl.Listener(*wlr.Output) = .init(Server.newOutput),
+
 
     xdg_shell: *wlr.XdgShell,
+
     xdg_activation: *wlr.XdgActivationV1,
     xdg_decoration: *wlr.XdgDecorationManagerV1,
-    new_xdg_toplevel: wl.Listener(*wlr.XdgToplevel) = .init(Server.newXdgToplevel),
-    new_xdg_popup: wl.Listener(*wlr.XdgPopup) = .init(Server.newXdgPopup),
-    
     layer_shell: *wlr.LayerShellV1,
     foreign_toplevel_mgr: *wlr.ForeignToplevelManagerV1,
-    new_layer_surface: wl.Listener(*wlr.LayerSurfaceV1) = .init(Server.newLayerSurface),
+    session_lock_mgr: *wlr.SessionLockManagerV1,
+    virtual_keyboard_mgr: *wlr.VirtualKeyboardManagerV1 = undefined,
 
     workspaces: [10]*Workspace = undefined,
-    // TODO: Make workspace count configurable instead of hardcoded to 10.
     focused_workspace: *Workspace = undefined,
 
     seat: *wlr.Seat,
-    new_input: wl.Listener(*wlr.InputDevice) = .init(Server.newInput),
-    request_set_cursor: wl.Listener(*wlr.Seat.event.RequestSetCursor) = .init(Server.requestSetCursor),
-    request_set_selection: wl.Listener(*wlr.Seat.event.RequestSetSelection) = .init(Server.requestSetSelection),
     keyboards: wl.list.Head(KeyboardDevice, .link) = undefined,
     outputs: wl.list.Head(@import("Output.zig").Output, .link) = undefined,
     toplevels: wl.list.Head(View.Toplevel, .link) = undefined,
@@ -84,22 +78,17 @@ pub const Server = struct {
 
     cursor: *wlr.Cursor,
     cursor_mgr: *wlr.XcursorManager,
-    cursor_motion: wl.Listener(*wlr.Pointer.event.Motion) = .init(Server.cursorMotion),
-    cursor_motion_absolute: wl.Listener(*wlr.Pointer.event.MotionAbsolute) = .init(Server.cursorMotionAbsolute),
-    cursor_button: wl.Listener(*wlr.Pointer.event.Button) = .init(Server.cursorButton),
-    cursor_axis: wl.Listener(*wlr.Pointer.event.Axis) = .init(Server.cursorAxis),
-    cursor_frame: wl.Listener(*wlr.Cursor) = .init(Server.cursorFrame),
+    shm: *wlr.Shm = undefined,
 
     config: Config = undefined,
     display_mode: @import("Config.zig").DisplayMode = .discrete,
-    // TODO: bg_color should be driven by config/theme rather than hardcoded here.
     bg_color: [4]f32 = .{ 1.0, 0.0, 0.0, 1.0 },
 
     current_sequence: std.ArrayListUnmanaged(KeyMatch) = .{},
     sequence_timer: *wl.EventSource = undefined,
     bar_timer: *wl.EventSource = undefined,
+    device_map: std.AutoHashMapUnmanaged(*wlr.InputDevice, void) = .{},
 
-    // For modifier tap detection
     last_mod_tap_ready: bool = false,
     last_mod_sym: ?xkb.Keysym = null,
     last_mod_timestamp: u32 = 0,
@@ -115,27 +104,47 @@ pub const Server = struct {
     socket_name_buf: [11]u8 = undefined,
     bar_height: i32 = 0,
     mcp: ?*McpServer = null,
+    ipc: ?*IpcServer = null,
     active_menu: ?*Menu = null,
-    
-    session_lock_mgr: *wlr.SessionLockManagerV1,
     active_session_lock: ?*SessionLock = null,
-    new_session_lock: wl.Listener(*wlr.SessionLockV1) = .init(Server.newSessionLock),
+    listeners: Listeners,
+
+    pub const Listeners = extern struct {
+        new_output: wl.Listener(*wlr.Output),
+        new_xdg_toplevel: wl.Listener(*wlr.XdgToplevel),
+        new_xdg_popup: wl.Listener(*wlr.XdgPopup),
+        new_layer_surface: wl.Listener(*wlr.LayerSurfaceV1),
+        new_input: wl.Listener(*wlr.InputDevice),
+        request_set_cursor: wl.Listener(*wlr.Seat.event.RequestSetCursor),
+        request_set_selection: wl.Listener(*wlr.Seat.event.RequestSetSelection),
+        cursor_motion: wl.Listener(*wlr.Pointer.event.Motion),
+        cursor_motion_absolute: wl.Listener(*wlr.Pointer.event.MotionAbsolute),
+        cursor_button: wl.Listener(*wlr.Pointer.event.Button),
+        cursor_axis: wl.Listener(*wlr.Pointer.event.Axis),
+        cursor_frame: wl.Listener(*wlr.Cursor),
+        new_session_lock: wl.Listener(*wlr.SessionLockV1),
+        new_virtual_keyboard: wl.Listener(*wlr.VirtualKeyboardV1),
+    };
+
+
 
     pub fn init(server: *Server) !void {
         // Initialize listeners and fields with defaults explicitly to avoid garbage
-        server.new_output = .init(Server.newOutput);
-        server.new_xdg_toplevel = .init(Server.newXdgToplevel);
-        server.new_xdg_popup = .init(Server.newXdgPopup);
-        server.new_input = .init(Server.newInput);
-        server.request_set_cursor = .init(Server.requestSetCursor);
-        server.request_set_selection = .init(Server.requestSetSelection);
-        server.new_layer_surface = .init(Server.newLayerSurface);
-        server.cursor_motion = .init(Server.cursorMotion);
-        server.cursor_motion_absolute = .init(Server.cursorMotionAbsolute);
-        server.cursor_button = .init(Server.cursorButton);
-        server.cursor_axis = .init(Server.cursorAxis);
-        server.cursor_frame = .init(Server.cursorFrame);
-        server.new_session_lock = .init(Server.newSessionLock);
+        server.listeners.new_output = .init(Server.newOutput);
+        server.listeners.new_xdg_toplevel = .init(Server.newXdgToplevel);
+        server.listeners.new_xdg_popup = .init(Server.newXdgPopup);
+        server.listeners.new_input = .init(Server.newInput);
+        server.listeners.request_set_cursor = .init(Server.requestSetCursor);
+        server.listeners.request_set_selection = .init(Server.requestSetSelection);
+        server.listeners.new_layer_surface = .init(Server.newLayerSurface);
+        server.listeners.cursor_motion = .init(Server.cursorMotion);
+        server.listeners.cursor_motion_absolute = .init(Server.cursorMotionAbsolute);
+        server.listeners.cursor_button = .init(Server.cursorButton);
+        server.listeners.cursor_axis = .init(Server.cursorAxis);
+        server.listeners.cursor_frame = .init(Server.cursorFrame);
+        server.listeners.new_session_lock = .init(Server.newSessionLock);
+        server.listeners.new_virtual_keyboard = .init(Server.newVirtualKeyboard);
+
         server.keyboards.init();
         server.outputs.init();
         server.toplevels.init();
@@ -155,8 +164,16 @@ pub const Server = struct {
         server.bg_color = .{ 0.15, 0.17, 0.23, 1.0 }; // Elegant dark gray
         server.active_menu = null;
         server.active_session_lock = null;
+        server.device_map = .{};
+
+        server.keyboards.init();
+        server.outputs.init();
+        server.toplevels.init();
+        server.layer_surfaces.init();
 
         const wl_server = try wl.Server.create();
+
+
         const loop = wl_server.getEventLoop();
         const backend = try wlr.Backend.autocreate(loop, @ptrCast(&server.session));
         const renderer = try wlr.Renderer.autocreate(backend);
@@ -180,10 +197,8 @@ pub const Server = struct {
         server.seat = try wlr.Seat.create(wl_server, "seat0");
         server.xdg_shell = try wlr.XdgShell.create(wl_server, 3);
         
-        server.layer_shell = try wlr.LayerShellV1.create(wl_server, 4);
-
         server.session_lock_mgr = try wlr.SessionLockManagerV1.create(wl_server);
-        server.session_lock_mgr.events.new_lock.add(&server.new_session_lock);
+        server.session_lock_mgr.events.new_lock.add(&server.listeners.new_session_lock);
 
         server.xdg_activation = try wlr.XdgActivationV1.create(wl_server);
         server.xdg_decoration = try wlr.XdgDecorationManagerV1.create(wl_server);
@@ -191,19 +206,23 @@ pub const Server = struct {
         server.cursor.attachOutputLayout(server.output_layout);
         server.cursor_mgr = try wlr.XcursorManager.create(null, 24);
 
-        server.backend.events.new_output.add(&server.new_output);
-        server.xdg_shell.events.new_toplevel.add(&server.new_xdg_toplevel);
-        server.xdg_shell.events.new_popup.add(&server.new_xdg_popup);
-        server.backend.events.new_input.add(&server.new_input);
-        server.seat.events.request_set_cursor.add(&server.request_set_cursor);
-        server.seat.events.request_set_selection.add(&server.request_set_selection);
-        server.layer_shell.events.new_surface.add(&server.new_layer_surface);
+        server.virtual_keyboard_mgr = try wlr.VirtualKeyboardManagerV1.create(wl_server);
+        server.virtual_keyboard_mgr.events.new_virtual_keyboard.add(&server.listeners.new_virtual_keyboard);
 
-        server.cursor.events.motion.add(&server.cursor_motion);
-        server.cursor.events.motion_absolute.add(&server.cursor_motion_absolute);
-        server.cursor.events.button.add(&server.cursor_button);
-        server.cursor.events.axis.add(&server.cursor_axis);
-        server.cursor.events.frame.add(&server.cursor_frame);
+        server.backend.events.new_output.add(&server.listeners.new_output);
+        server.xdg_shell.events.new_toplevel.add(&server.listeners.new_xdg_toplevel);
+        server.xdg_shell.events.new_popup.add(&server.listeners.new_xdg_popup);
+        server.backend.events.new_input.add(&server.listeners.new_input);
+
+        server.seat.events.request_set_cursor.add(&server.listeners.request_set_cursor);
+        server.seat.events.request_set_selection.add(&server.listeners.request_set_selection);
+
+
+        server.cursor.events.motion.add(&server.listeners.cursor_motion);
+        server.cursor.events.motion_absolute.add(&server.listeners.cursor_motion_absolute);
+        server.cursor.events.button.add(&server.listeners.cursor_button);
+        server.cursor.events.axis.add(&server.listeners.cursor_axis);
+        server.cursor.events.frame.add(&server.listeners.cursor_frame);
 
         server.sequence_timer = try loop.addTimer(*Server, handleSequenceTimeout, server);
         server.sequence_timer.timerUpdate(0) catch {};
@@ -233,6 +252,8 @@ pub const Server = struct {
         _ = try wlr.FractionalScaleManagerV1.create(server.wl_server, 1);
         _ = try wlr.Viewporter.create(server.wl_server);
         _ = try wlr.Presentation.create(server.wl_server, server.backend, 1);
+        server.layer_shell = try wlr.LayerShellV1.create(wl_server, 4);
+        server.layer_shell.events.new_surface.add(&server.listeners.new_layer_surface);
 
         // Initialize 10 workspaces
         for (&server.workspaces, 0..) |*ws, i| {
@@ -286,25 +307,37 @@ pub const Server = struct {
         };
         // TODO: MCP server currently has no socket listener — it initializes but never accepts connections.
         //       Wire up a Unix socket or TCP listener so external tools can actually connect.
+
+        server.ipc = blk: {
+            const ipc = IpcServer.init(server, std.heap.c_allocator) catch |err| {
+                std.log.err("failed to initialize IPC server: {}", .{err});
+                break :blk null;
+            };
+            ipc.start() catch |err| {
+                std.log.err("failed to start IPC server: {}", .{err});
+                ipc.deinit();
+                break :blk null;
+            };
+            break :blk ipc;
+        };
     }
 
     pub fn getLayerTree(server: *Server, layer: anytype) *wlr.SceneTree {
-        // TODO: The `anytype` parameter accepts any value; restrict to wlr.LayerShellV1.Layer
-        //       to get compile-time safety and avoid the silent `else => server.top_tree` fallback.
         return switch (layer) {
             .background => server.bg_tree,
             .bottom => server.bottom_tree,
             .top => server.top_tree,
             .overlay => server.overlay_tree,
-            else => server.top_tree,
+            else => unreachable,
         };
     }
 
     fn newLayerSurface(listener: *wl.Listener(*wlr.LayerSurfaceV1), wlr_layer_surface: *wlr.LayerSurfaceV1) void {
-        const server: *Server = @fieldParentPtr("new_layer_surface", listener);
+        const listeners: *Server.Listeners = @fieldParentPtr("new_layer_surface", listener);
+        const server: *Server = @fieldParentPtr("listeners", listeners);
+
         _ = LayerSurface.create(server, wlr_layer_surface) catch |err| {
             std.log.err("failed to create layer surface: {}", .{err});
-            return;
         };
     }
 
@@ -315,19 +348,12 @@ pub const Server = struct {
             return;
         };
         xdg_surface.data = scene_tree;
-
-        const popup = std.heap.c_allocator.create(Popup) catch {
-            std.log.err("failed to allocate new popup", .{});
+        _ = Popup.create(xdg_popup, scene_tree) catch {
+            scene_tree.node.destroy();
             return;
         };
-        popup.* = .{
-            .xdg_popup = xdg_popup,
-            .scene_tree = scene_tree,
-        };
-
-        xdg_surface.surface.events.commit.add(&popup.commit);
-        xdg_popup.events.destroy.add(&popup.destroy);
         _ = server;
+
     }
 
     pub fn warpCursorToOutput(server: *Server, wlr_output: *wlr.Output) void {
@@ -370,8 +396,87 @@ pub const Server = struct {
         }
     }
 
-    pub fn spawn(server: *Server, cmd: []const u8) void {
-        std.log.info("Compositor spawning command: {s}", .{cmd});
+    /// Inject text as key events into the focused surface using xkb keysym lookup.
+    pub fn typeText(server: *Server, text: []const u8) void {
+        const wlr_keyboard = server.seat.keyboard_state.keyboard orelse {
+            std.log.warn("typeText: no keyboard attached to seat", .{});
+            return;
+        };
+        const xkb_state = wlr_keyboard.xkb_state orelse {
+            std.log.warn("typeText: no xkb state", .{});
+            return;
+        };
+        const keymap = xkb_state.getKeymap();
+
+        const now: u32 = @intCast(@divTrunc(std.time.milliTimestamp(), 1));
+
+        var i: usize = 0;
+        while (i < text.len) {
+            // Handle \n escape sequence
+            if (text[i] == '\\' and i + 1 < text.len and text[i + 1] == 'n') {
+                // Send Return key (keycode 28 in evdev = xkb keycode 36)
+                server.seat.keyboardNotifyKey(now, 28, .pressed);
+                server.seat.keyboardNotifyKey(now, 28, .released);
+                i += 2;
+                continue;
+            }
+
+            const ch = text[i];
+            i += 1;
+
+            // Get keysym for this character using xkb C API
+            const c_xkb = @import("c.zig").c;
+            const sym_val = c_xkb.xkb_utf32_to_keysym(@as(u32, ch));
+            if (sym_val == 0) continue;
+            const sym: xkb.Keysym = @enumFromInt(sym_val);
+
+            // Find a keycode that produces this keysym
+            const min_keycode = keymap.minKeycode();
+            const max_keycode = keymap.maxKeycode();
+            var found_keycode: ?u32 = null;
+            var found_shift = false;
+
+            var kc = min_keycode;
+            while (kc <= max_keycode) : (kc += 1) {
+                const num_layouts = keymap.numLayoutsForKey(kc);
+                var layout: u32 = 0;
+                while (layout < num_layouts) : (layout += 1) {
+                    const num_levels = keymap.numLevelsForKey(kc, layout);
+                    var level: u32 = 0;
+                    while (level < num_levels) : (level += 1) {
+                        const syms = keymap.keyGetSymsByLevel(kc, layout, level);
+                        for (syms) |s| {
+                            if (@intFromEnum(s) == @intFromEnum(sym)) {
+                                found_keycode = kc;
+                                found_shift = (level == 1);
+                                break;
+                            }
+                        }
+                        if (found_keycode != null) break;
+                    }
+                    if (found_keycode != null) break;
+                }
+                if (found_keycode != null) break;
+            }
+
+            if (found_keycode) |kc_found| {
+                // evdev keycode = xkb keycode - 8
+                const evdev_kc = kc_found - 8;
+                const shift_evdev: u32 = 42; // KEY_LEFTSHIFT
+
+                if (found_shift) {
+                    server.seat.keyboardNotifyKey(now, shift_evdev, .pressed);
+                }
+                server.seat.keyboardNotifyKey(now, evdev_kc, .pressed);
+                server.seat.keyboardNotifyKey(now, evdev_kc, .released);
+                if (found_shift) {
+                    server.seat.keyboardNotifyKey(now, shift_evdev, .released);
+                }
+            }
+        }
+    }
+
+    pub fn spawn(server: *Server, cmd: []const u8) void {        std.log.info("Compositor spawning command: {s}", .{cmd});
 
         // TODO: Consider using posix.fork + posix.execve directly to avoid shell injection risk
         //       when cmd comes from untrusted sources (e.g. MCP tool calls).
@@ -494,18 +599,21 @@ pub const Server = struct {
     pub fn deinit(server: *Server) void {
         server.wl_server.destroyClients();
 
-        server.new_input.link.remove();
-        server.new_output.link.remove();
-        server.new_xdg_toplevel.link.remove();
-        server.new_xdg_popup.link.remove();
-        server.request_set_cursor.link.remove();
-        server.request_set_selection.link.remove();
-        server.cursor_motion.link.remove();
-        server.cursor_motion_absolute.link.remove();
-        server.cursor_button.link.remove();
-        server.cursor_axis.link.remove();
-        server.cursor_frame.link.remove();
-        server.new_layer_surface.link.remove();
+        server.listeners.new_input.link.remove();
+        server.listeners.new_output.link.remove();
+        server.listeners.new_xdg_toplevel.link.remove();
+        server.listeners.new_xdg_popup.link.remove();
+        server.listeners.request_set_cursor.link.remove();
+        server.listeners.request_set_selection.link.remove();
+        server.listeners.cursor_motion.link.remove();
+        server.listeners.cursor_motion_absolute.link.remove();
+        server.listeners.cursor_button.link.remove();
+        server.listeners.cursor_axis.link.remove();
+        server.listeners.cursor_frame.link.remove();
+        server.listeners.new_layer_surface.link.remove();
+
+        // Stop IPC before destroying the event loop it registered with.
+        if (server.ipc) |ipc| ipc.deinit();
 
         for (server.workspaces) |ws| ws.deinit();
 
@@ -515,7 +623,8 @@ pub const Server = struct {
     }
 
     fn newOutput(listener: *wl.Listener(*wlr.Output), wlr_output: *wlr.Output) void {
-        const server: *Server = @fieldParentPtr("new_output", listener);
+        const listeners: *Server.Listeners = @fieldParentPtr("new_output", listener);
+        const server: *Server = @fieldParentPtr("listeners", listeners);
 
         if (!wlr_output.initRender(server.allocator, server.renderer)) return;
 
@@ -554,79 +663,30 @@ pub const Server = struct {
     }
 
     fn newXdgToplevel(listener: *wl.Listener(*wlr.XdgToplevel), xdg_toplevel: *wlr.XdgToplevel) void {
-        const server: *Server = @fieldParentPtr("new_xdg_toplevel", listener);
-        const xdg_surface = xdg_toplevel.base;
+        const listeners: *Server.Listeners = @fieldParentPtr("new_xdg_toplevel", listener);
+        const server: *Server = @fieldParentPtr("listeners", listeners);
 
-        const toplevel = std.heap.c_allocator.create(Toplevel) catch {
-            std.log.err("failed to allocate new toplevel", .{});
+        const toplevel = Toplevel.create(server, xdg_toplevel) catch {
             return;
         };
 
         const ws = server.focused_workspace;
-        toplevel.server = server;
-        const container = ws.scene_tree.createSceneTree() catch {
-            std.heap.c_allocator.destroy(toplevel);
-            std.log.err("failed to allocate container scene tree", .{});
-            return;
-        };
-
-        const xdg_surface_tree = container.createSceneXdgSurface(xdg_surface) catch {
-            container.node.destroy();
-            std.heap.c_allocator.destroy(toplevel);
-            std.log.err("failed to allocate xdg surface scene tree", .{});
-            return;
-        };
-
-        toplevel.* = .{
-            .server = server,
-            .workspace = ws,
-            .xdg_toplevel = xdg_toplevel,
-            .scene_tree = container,
-            .xdg_surface_tree = xdg_surface_tree,
-            .width_percent = @as(i32, @intFromFloat(server.config.split_ratio * 100.0)),
-            .foreign_toplevel = wlr.ForeignToplevelHandleV1.create(server.foreign_toplevel_mgr) catch null,
-        };
-
-        // Initialize border rects
-        toplevel.border_top = container.createSceneRect(0, 0, &toplevel.inactive_border_color) catch null;
-        toplevel.border_bottom = container.createSceneRect(0, 0, &toplevel.inactive_border_color) catch null;
-        toplevel.border_left = container.createSceneRect(0, 0, &toplevel.inactive_border_color) catch null;
-        toplevel.border_right = container.createSceneRect(0, 0, &toplevel.inactive_border_color) catch null;
-
-        container.node.data = toplevel;
-        xdg_surface.data = container;
-
+        toplevel.workspace = ws;
+        
         // Add to workspace list immediately so link is valid for remove() later
         ws.views.prepend(toplevel);
         ws.focus_history.prepend(toplevel);
 
-        if (ws.layout == .tiling) {
-            if (ws.layout.tiling.root) |root| {
-                root.split(std.heap.c_allocator, toplevel, server.config.split_ratio) catch |err| {
-                    std.log.err("failed to split tiling node: {}", .{err});
-                };
-            } else {
-                ws.layout.tiling.root = TilingNode.createLeaf(std.heap.c_allocator, toplevel) catch null;
-            }
-        }
-
         ws.arrange();
-        xdg_surface.surface.events.commit.add(&toplevel.commit);
-        xdg_surface.surface.events.map.add(&toplevel.map);
-        xdg_surface.surface.events.unmap.add(&toplevel.unmap);
-        xdg_toplevel.events.destroy.add(&toplevel.destroy);
-        xdg_toplevel.events.request_move.add(&toplevel.request_move);
-        xdg_toplevel.events.request_resize.add(&toplevel.request_resize);
-        xdg_toplevel.events.request_maximize.add(&toplevel.request_maximize);
-        xdg_toplevel.events.request_fullscreen.add(&toplevel.request_fullscreen);
-        xdg_toplevel.events.request_show_window_menu.add(&toplevel.request_show_window_menu);
     }
+
 
     fn newXdgPopup(listener: *wl.Listener(*wlr.XdgPopup), xdg_popup: *wlr.XdgPopup) void {
         const parent = wlr.XdgSurface.tryFromWlrSurface(xdg_popup.parent.?) orelse return;
         const parent_tree = @as(?*wlr.SceneTree, @ptrCast(@alignCast(parent.data))) orelse return;
 
-        const server: *Server = @fieldParentPtr("new_xdg_popup", listener);
+        const listeners: *Server.Listeners = @fieldParentPtr("new_xdg_popup", listener);
+        const server: *Server = @fieldParentPtr("listeners", listeners);
         server.handleNewXdgPopup(xdg_popup, parent_tree);
     }
 
@@ -647,14 +707,10 @@ pub const Server = struct {
 
             var it: ?*wlr.SceneTree = node.parent;
             while (it) |n| : (it = n.node.parent) {
-                // We use node.data to identify toplevels.
-                // We must be careful to only cast if it looks like a Toplevel.
                 if (n.node.data) |data| {
-                    // TODO: This unchecked cast is unsafe — any scene tree node with non-null data
-                    //       (e.g. LayerShell surfaces) will be misidentified as a Toplevel.
-                    //       Use a tagged union or a type tag field to distinguish node types safely.
                     const toplevel: *Toplevel = @ptrCast(@alignCast(data));
-                    return ViewAtResult{                        .toplevel = toplevel,
+                    return ViewAtResult{
+                        .toplevel = toplevel,
                         .surface = scene_surface.surface,
                         .sx = sx,
                         .sy = sy,
@@ -665,10 +721,27 @@ pub const Server = struct {
         return null;
     }
 
+    fn newVirtualKeyboard(listener: *wl.Listener(*wlr.VirtualKeyboardV1), virtual_keyboard: *wlr.VirtualKeyboardV1) void {
+        const listeners: *Server.Listeners = @fieldParentPtr("new_virtual_keyboard", listener);
+        const server: *Server = @fieldParentPtr("listeners", listeners);
+
+        const device = &virtual_keyboard.keyboard.base;
+
+        if (server.device_map.get(device)) |_| {
+            return;
+        }
+        server.device_map.put(std.heap.c_allocator, device, {}) catch {};
+
+        KeyboardDevice.create(server, device) catch |err| {
+            std.log.err("Failed to create keyboard for virtual device: {}", .{err});
+        };
+    }
+
     fn newSessionLock(listener: *wl.Listener(*wlr.SessionLockV1), wlr_lock: *wlr.SessionLockV1) void {
-        const server: *Server = @fieldParentPtr("new_session_lock", listener);
+        const listeners: *Server.Listeners = @fieldParentPtr("new_session_lock", listener);
+        const server: *Server = @fieldParentPtr("listeners", listeners);
+
         if (server.active_session_lock != null) {
-            wlr_lock.destroy();
             return;
         }
 
@@ -679,13 +752,12 @@ pub const Server = struct {
         };
     }
 
+
     pub fn setOverlayEnabled(self: *Server, enabled: bool) void {
         const visible = !enabled;
         self.window_tree.node.setEnabled(visible);
         self.bottom_tree.node.setEnabled(visible);
         self.top_tree.node.setEnabled(visible);
-        
-        // Background usually stays if it's black or we can hide it too
         self.bg_tree.node.setEnabled(visible);
     }
 
@@ -693,21 +765,19 @@ pub const Server = struct {
         if (server.seat.keyboard_state.focused_surface) |previous_surface| {
             if (previous_surface == surface) return;
             if (wlr.XdgSurface.tryFromWlrSurface(previous_surface)) |xdg_surface| {
-                if (xdg_surface.role_data.toplevel) |prev_t| {
-                    _ = wlr.XdgToplevel.setActivated(prev_t, false);
-                    if (View.fromXdgSurface(xdg_surface)) |v| {
-                        v.updateBorderColor(&v.inactive_border_color);
+                if (xdg_surface.role_data.toplevel) |prev_t_wlr| {
+                    _ = wlr.XdgToplevel.setActivated(prev_t_wlr, false);
+                    if (View.fromXdgSurface(xdg_surface)) |prev_t| {
+                        prev_t.updateBorderColor(&prev_t.inactive_border_color);
                     }
                 }
             }
         }
 
         server.focused_workspace = toplevel.workspace;
-        toplevel.updateBorderColor(&toplevel.active_border_color);
         toplevel.scene_tree.node.raiseToTop();
+        toplevel.updateBorderColor(&toplevel.active_border_color);
         
-        // Must remove before prepend — wl_list_insert doesn't detach first,
-        // so re-inserting without removing corrupts the doubly-linked list.
         toplevel.focus_link.remove();
         toplevel.workspace.focus_history.prepend(toplevel);
 
@@ -746,7 +816,7 @@ pub const Server = struct {
         ws.arrange();
     }
 
-    pub fn focusLayer(server: *Server, layer: *@import("LayerShell.zig").LayerSurface) void {
+    pub fn focusLayer(server: *Server, layer: *LayerSurface) void {
         const surface = layer.wlr_layer_surface.surface;
 
         if (server.seat.keyboard_state.focused_surface) |previous_surface| {
@@ -754,9 +824,6 @@ pub const Server = struct {
             if (wlr.XdgSurface.tryFromWlrSurface(previous_surface)) |xdg_surface| {
                 if (xdg_surface.role_data.toplevel) |prev_t| {
                     _ = wlr.XdgToplevel.setActivated(prev_t, false);
-                    if (View.fromXdgSurface(xdg_surface)) |v| {
-                        v.updateBorderColor(&v.inactive_border_color);
-                    }
                 }
             }
         }
@@ -772,8 +839,9 @@ pub const Server = struct {
         const ws = server.focused_workspace;
         var it = ws.focus_history.link.next;
         while (it != &ws.focus_history.link) : (it = it.?.next) {
-            const candidate: *@import("View.zig").Toplevel = @fieldParentPtr("focus_link", it.?);
+            const candidate: *Toplevel = @fieldParentPtr("focus_link", it.?);
             if (candidate.mapped and !candidate.hidden) {
+
                 server.focusView(candidate, candidate.xdg_toplevel.base.surface);
                 return;
             }
@@ -782,14 +850,40 @@ pub const Server = struct {
     }
 
     fn newInput(listener: *wl.Listener(*wlr.InputDevice), device: *wlr.InputDevice) void {
-        const server: *Server = @fieldParentPtr("new_input", listener);
+        const listeners: *Server.Listeners = @fieldParentPtr("new_input", listener);
+        const server: *Server = @fieldParentPtr("listeners", listeners);
+
+        std.debug.print("DEBUG: newInput device={*} type={}\n", .{device, device.type});
+
+        if (server.device_map.get(device)) |_| {
+            std.debug.print("DEBUG: device {*} already handled\n", .{device});
+            return;
+        }
+
+        const name = if (device.name) |n| std.mem.span(n) else "unnamed";
+
         switch (device.type) {
-            .keyboard => KeyboardDevice.create(server, device) catch |err| {
-                std.log.err("failed to create keyboard: {}", .{err});
-                return;
+            .keyboard => {
+                // Deduplicate with VirtualKeyboard manager if possible
+                if (device.getVirtualKeyboard() != null) {
+                    std.debug.print("DEBUG: skipping virtual keyboard in newInput\n", .{});
+                    return;
+                }
+
+                server.device_map.put(std.heap.c_allocator, device, {}) catch {};
+                std.log.info("New keyboard {*}: {s}", .{ device, name });
+                KeyboardDevice.create(server, device) catch |err| {
+                    std.log.err("failed to create keyboard: {}", .{err});
+                };
             },
-            .pointer => wlr.Cursor.attachInputDevice(server.cursor, device),
-            else => {},
+            .pointer => {
+                server.device_map.put(std.heap.c_allocator, device, {}) catch {};
+                std.log.info("New pointer device {*}: {s}", .{ device, name });
+                wlr.Cursor.attachInputDevice(server.cursor, device);
+            },
+            else => {
+                std.log.info("New input device {*}: {s} (type={}) - UNHANDLED", .{ device, name, device.type });
+            },
         }
 
         const has_keyboard = server.keyboards.link.next != &server.keyboards.link;
@@ -804,7 +898,9 @@ pub const Server = struct {
         listener: *wl.Listener(*wlr.Seat.event.RequestSetCursor),
         event: *wlr.Seat.event.RequestSetCursor,
     ) void {
-        const server: *Server = @fieldParentPtr("request_set_cursor", listener);
+        const listeners: *Server.Listeners = @fieldParentPtr("request_set_cursor", listener);
+        const server: *Server = @fieldParentPtr("listeners", listeners);
+
         if (event.seat_client == server.seat.pointer_state.focused_client)
             wlr.Cursor.setSurface(server.cursor, event.surface, event.hotspot_x, event.hotspot_y);
     }
@@ -813,7 +909,9 @@ pub const Server = struct {
         listener: *wl.Listener(*wlr.Seat.event.RequestSetSelection),
         event: *wlr.Seat.event.RequestSetSelection,
     ) void {
-        const server: *Server = @fieldParentPtr("request_set_selection", listener);
+        const listeners: *Server.Listeners = @fieldParentPtr("request_set_selection", listener);
+        const server: *Server = @fieldParentPtr("listeners", listeners);
+
         wlr.Seat.setSelection(server.seat, event.source, event.serial);
     }
 
@@ -821,7 +919,9 @@ pub const Server = struct {
         listener: *wl.Listener(*wlr.Pointer.event.Motion),
         event: *wlr.Pointer.event.Motion,
     ) void {
-        const server: *Server = @fieldParentPtr("cursor_motion", listener);
+        const listeners: *Server.Listeners = @fieldParentPtr("cursor_motion", listener);
+        const server: *Server = @fieldParentPtr("listeners", listeners);
+
         server.cursor.move(event.device, event.delta_x, event.delta_y);
         server.processCursorMotion(event.time_msec);
     }
@@ -830,7 +930,9 @@ pub const Server = struct {
         listener: *wl.Listener(*wlr.Pointer.event.MotionAbsolute),
         event: *wlr.Pointer.event.MotionAbsolute,
     ) void {
-        const server: *Server = @fieldParentPtr("cursor_motion_absolute", listener);
+        const listeners: *Server.Listeners = @fieldParentPtr("cursor_motion_absolute", listener);
+        const server: *Server = @fieldParentPtr("listeners", listeners);
+
         server.cursor.warpAbsolute(event.device, event.x, event.y);
         server.processCursorMotion(event.time_msec);
     }
@@ -941,8 +1043,9 @@ pub const Server = struct {
         listener: *wl.Listener(*wlr.Pointer.event.Button),
         event: *wlr.Pointer.event.Button,
     ) void {
-        const server: *Server = @fieldParentPtr("cursor_button", listener);
-        
+        const listeners: *Server.Listeners = @fieldParentPtr("cursor_button", listener);
+        const server: *Server = @fieldParentPtr("listeners", listeners);
+
         if (server.active_session_lock) |_| {
             _ = server.seat.pointerNotifyButton(event.time_msec, event.button, event.state);
             return;
@@ -962,7 +1065,6 @@ pub const Server = struct {
             }
             return;
         }
-
 
         if (event.state == .pressed and event.button == 0x110) { // BTN_LEFT
             if (server.output_layout.outputAt(server.cursor.x, server.cursor.y)) |wlr_out| {
@@ -1055,7 +1157,7 @@ pub const Server = struct {
             for (server.workspaces) |ws| {
                 if (ws.visible_on != null and ws.visible_on.?.wlr_output == wlr_out) {
                     server.focused_workspace = ws;
-                    server.seat.keyboardNotifyClearFocus();
+                    _ = server.seat.pointerNotifyButton(event.time_msec, event.button, event.state);
                     break;
                 }
             }
@@ -1069,7 +1171,9 @@ pub const Server = struct {
         listener: *wl.Listener(*wlr.Pointer.event.Axis),
         event: *wlr.Pointer.event.Axis,
     ) void {
-        const server: *Server = @fieldParentPtr("cursor_axis", listener);
+        const listeners: *Server.Listeners = @fieldParentPtr("cursor_axis", listener);
+        const server: *Server = @fieldParentPtr("listeners", listeners);
+
         wlr.Seat.pointerNotifyAxis(
             server.seat,
             event.time_msec,
@@ -1081,8 +1185,12 @@ pub const Server = struct {
         );
     }
 
-    fn cursorFrame(listener: *wl.Listener(*wlr.Cursor), _: *wlr.Cursor) void {
-        const server: *Server = @fieldParentPtr("cursor_frame", listener);
+    fn cursorFrame(
+        listener: *wl.Listener(*wlr.Cursor),
+        _: *wlr.Cursor,
+    ) void {
+        const listeners: *Server.Listeners = @fieldParentPtr("cursor_frame", listener);
+        const server: *Server = @fieldParentPtr("listeners", listeners);
         wlr.Seat.pointerNotifyFrame(server.seat);
     }
 
@@ -1142,17 +1250,7 @@ pub const Server = struct {
             .toggle_layout => {
                 const ws = server.focused_workspace;
                 if (ws.layout == .ribbon) {
-                    var tiling = Tiling{};
-                    var it = ws.views.link.prev;
-                    while (it != &ws.views.link) : (it = it.?.prev) {
-                        const view: *Toplevel = @fieldParentPtr("link", it.?);
-                        if (tiling.root) |root| {
-                            root.split(std.heap.c_allocator, view, server.config.split_ratio) catch {};
-                        } else {
-                            tiling.root = TilingNode.createLeaf(std.heap.c_allocator, view) catch null;
-                        }
-                    }
-                    ws.layout = .{ .tiling = tiling };
+                    ws.layout = .{ .tiling = .{} };
                 } else {
                     ws.layout = .{ .ribbon = .{} };
                 }
@@ -1336,12 +1434,23 @@ pub const Server = struct {
     }
 
     fn takeScreenshot(server: *Server) void {
-        var it = server.outputs.link.next;
-        while (it != &server.outputs.link) : (it = it.?.next) {
-            const output: *Output = @fieldParentPtr("link", it.?);
-            Screenshot.captureOutput(server.renderer, output.wlr_output, server.scene) catch |err| {
-                std.log.err("Failed to capture screenshot for {s}: {}", .{ output.wlr_output.name, err });
-            };
-        }
+        const timestamp = std.time.timestamp();
+        var name_buf: [128]u8 = undefined;
+        const filename = std.fmt.bufPrint(&name_buf, "/tmp/sailer-screenshot-{d}.jpg", .{timestamp}) catch return;
+
+        // Use grim which speaks wlr-screencopy — the compositor already exposes that protocol.
+        var child = std.process.Child.init(
+            &[_][]const u8{ "grim", filename },
+            std.heap.c_allocator,
+        );
+        var env_map = std.process.getEnvMap(std.heap.c_allocator) catch return;
+        defer env_map.deinit();
+        env_map.put("WAYLAND_DISPLAY", server.socket_name) catch {};
+        child.env_map = &env_map;
+        _ = child.spawn() catch |err| {
+            std.log.err("Failed to spawn grim: {}", .{err});
+            return;
+        };
+        std.log.info("Screenshot saved to {s}", .{filename});
     }
 };

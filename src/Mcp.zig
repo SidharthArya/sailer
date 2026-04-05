@@ -110,22 +110,26 @@ pub const McpServer = struct {
                 var list: std.ArrayList(std.json.Value) = .empty;
                 defer list.deinit(self.allocator);
 
-                var it = self.server.toplevels.link.next;
                 var idx: u32 = 0;
-                while (it != &self.server.toplevels.link) : (it = it.?.next) {
-                    const view: *Toplevel = @fieldParentPtr("link", it.?);
-                    const title = view.xdg_toplevel.title orelse "unnamed";
-                    const app_id = view.xdg_toplevel.app_id orelse "unknown";
-                    const focused = (self.server.seat.keyboard_state.focused_surface == view.xdg_toplevel.base.surface);
+                for (self.server.workspaces) |ws| {
+                    var it = ws.views.link.next;
+                    while (it != &ws.views.link) : (it = it.?.next) {
+                        const view: *Toplevel = @fieldParentPtr("link", it.?);
+                        if (!view.mapped) continue;
+                        const title = view.xdg_toplevel.title orelse "unnamed";
+                        const app_id = view.xdg_toplevel.app_id orelse "unknown";
+                        const focused = (self.server.seat.keyboard_state.focused_surface == view.xdg_toplevel.base.surface);
 
-                    var window_obj = std.json.ObjectMap.init(self.allocator);
-                    try window_obj.put("id", .{ .integer = @intCast(idx) });
-                    try window_obj.put("title", .{ .string = std.mem.span(title) });
-                    try window_obj.put("app_id", .{ .string = std.mem.span(app_id) });
-                    try window_obj.put("focused", .{ .bool = focused });
-                    
-                    try list.append(self.allocator, .{ .object = window_obj });
-                    idx += 1;
+                        var window_obj = std.json.ObjectMap.init(self.allocator);
+                        try window_obj.put("id", .{ .integer = @intCast(idx) });
+                        try window_obj.put("title", .{ .string = std.mem.span(title) });
+                        try window_obj.put("app_id", .{ .string = std.mem.span(app_id) });
+                        try window_obj.put("focused", .{ .bool = focused });
+                        try window_obj.put("workspace", .{ .string = ws.name });
+
+                        try list.append(self.allocator, .{ .object = window_obj });
+                        idx += 1;
+                    }
                 }
 
                 var buf: std.ArrayList(u8) = .empty;
@@ -138,8 +142,11 @@ pub const McpServer = struct {
                     },
                 });
             } else if (std.mem.eql(u8, tool_name.string, "spawn")) {
-                const cmd = args.object.get("command").?.string;
-                // TODO: The .? here will panic if "command" is missing — add proper error handling.
+                const cmd_val = args.object.get("command") orelse {
+                    try self.sendError(writer, id, "missing required argument: command");
+                    return;
+                };
+                const cmd = cmd_val.string;
                 self.server.spawn(cmd);
                 try self.sendResponse(writer, id, .{
                     .content = [_]struct { type: []const u8, text: []const u8 }{
@@ -147,16 +154,25 @@ pub const McpServer = struct {
                     },
                 });
             } else if (std.mem.eql(u8, tool_name.string, "focus_window")) {
-                const title = args.object.get("title").?.string;
-                var it = self.server.toplevels.link.next;
-                while (it != &self.server.toplevels.link) : (it = it.?.next) {
-                    const view: *Toplevel = @fieldParentPtr("link", it.?);
-                    const window_title = view.xdg_toplevel.title orelse "";
-                    if (std.mem.indexOf(u8, std.mem.span(window_title), title) != null) {
-                        self.server.focusView(view, view.xdg_toplevel.base.surface);
-                        break;
+                const title_val = args.object.get("title") orelse {
+                    try self.sendError(writer, id, "missing required argument: title");
+                    return;
+                };
+                const title = title_val.string;
+                var found = false;
+                outer: for (self.server.workspaces) |ws| {
+                    var it = ws.views.link.next;
+                    while (it != &ws.views.link) : (it = it.?.next) {
+                        const view: *Toplevel = @fieldParentPtr("link", it.?);
+                        const window_title = view.xdg_toplevel.title orelse "";
+                        if (std.mem.indexOf(u8, std.mem.span(window_title), title) != null) {
+                            self.server.focusView(view, view.xdg_toplevel.base.surface);
+                            found = true;
+                            break :outer;
+                        }
                     }
                 }
+                std.log.debug("focus_window '{}': found={}", .{ std.zig.fmtEscapes(title), found });
                 try self.sendResponse(writer, id, .{
                     .content = [_]struct { type: []const u8, text: []const u8 }{
                         .{ .type = "text", .text = "Focus updated" },
@@ -166,7 +182,7 @@ pub const McpServer = struct {
                 var contents: std.ArrayList(std.json.Value) = .empty;
                 defer {
                     for (contents.items) |item| {
-                        self.allocator.free(item.object.get("text").?.string);
+                        if (item.object.get("data")) |d| self.allocator.free(d.string);
                     }
                     contents.deinit(self.allocator);
                 }
@@ -176,7 +192,7 @@ pub const McpServer = struct {
                     const output: *@import("Output.zig").Output = @fieldParentPtr("link", it.?);
                     const scene_output = self.server.scene.getSceneOutput(output.wlr_output) orelse continue;
                     
-                    const bmp_data = Screenshot.captureOutput(self.allocator, scene_output) catch |err| {
+                    const bmp_data = Screenshot.captureToBytes(self.allocator, scene_output, output.wlr_output.width, output.wlr_output.height) catch |err| {
                         std.log.err("mcp: failed to capture screenshot for {s}: {}", .{ output.wlr_output.name, err });
                         continue;
                     };
@@ -205,5 +221,14 @@ pub const McpServer = struct {
             try writer.print("\"id\":{f},", .{std.json.fmt(i, .{})});
         }
         try writer.print("\"result\":{f}}}\n", .{std.json.fmt(result, .{})});
+    }
+
+    fn sendError(self: *McpServer, writer: anytype, id: ?std.json.Value, message: []const u8) !void {
+        _ = self;
+        try writer.writeAll("{\"jsonrpc\":\"2.0\",");
+        if (id) |i| {
+            try writer.print("\"id\":{f},", .{std.json.fmt(i, .{})});
+        }
+        try writer.print("\"error\":{{\"code\":-32602,\"message\":\"{s}\"}}}}\n", .{message});
     }
 };
