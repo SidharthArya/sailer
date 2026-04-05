@@ -43,6 +43,8 @@ zig build run
 
 Config is loaded from `~/.config/sailer/config.yaml` (or `.yml` / `.json`). If none is found, defaults are used.
 
+A full sample config is available at [`examples/config.yaml`](examples/config.yaml).
+
 Example config:
 
 ```yaml
