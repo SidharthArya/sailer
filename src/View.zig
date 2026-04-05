@@ -43,7 +43,7 @@ pub const Toplevel = struct {
         commit: wl.Listener(*wlr.Surface),
         map: wl.Listener(void),
         unmap: wl.Listener(void),
-        destroy: wl.Listener(*wlr.Surface),
+        destroy: wl.Listener(void),
         request_move: wl.Listener(*wlr.XdgToplevel.event.Move),
         request_resize: wl.Listener(*wlr.XdgToplevel.event.Resize),
         request_maximize: wl.Listener(void),
@@ -60,7 +60,17 @@ pub const Toplevel = struct {
             .scene_tree = undefined,
             .xdg_surface_tree = undefined,
             .listeners = undefined,
+            .border_width = 2,
         };
+
+        const scene_tree = server.window_tree.createSceneTree() catch return error.SceneTreeCreationFailed;
+        toplevel.scene_tree = scene_tree;
+        toplevel.xdg_surface_tree = scene_tree.createSceneXdgSurface(xdg_toplevel.base) catch return error.SceneTreeCreationFailed;
+
+        toplevel.border_top = scene_tree.createSceneRect(0, 0, &toplevel.inactive_border_color) catch null;
+        toplevel.border_bottom = scene_tree.createSceneRect(0, 0, &toplevel.inactive_border_color) catch null;
+        toplevel.border_left = scene_tree.createSceneRect(0, 0, &toplevel.inactive_border_color) catch null;
+        toplevel.border_right = scene_tree.createSceneRect(0, 0, &toplevel.inactive_border_color) catch null;
 
         toplevel.listeners.commit = .init(handleCommit);
         toplevel.listeners.map = .init(handleMap);
@@ -75,12 +85,15 @@ pub const Toplevel = struct {
         xdg_toplevel.base.surface.events.commit.add(&toplevel.listeners.commit);
         xdg_toplevel.base.surface.events.map.add(&toplevel.listeners.map);
         xdg_toplevel.base.surface.events.unmap.add(&toplevel.listeners.unmap);
-        xdg_toplevel.base.surface.events.destroy.add(&toplevel.listeners.destroy);
+        xdg_toplevel.events.destroy.add(&toplevel.listeners.destroy);
         xdg_toplevel.events.request_move.add(&toplevel.listeners.request_move);
         xdg_toplevel.events.request_resize.add(&toplevel.listeners.request_resize);
         xdg_toplevel.events.request_maximize.add(&toplevel.listeners.request_maximize);
         xdg_toplevel.events.request_fullscreen.add(&toplevel.listeners.request_fullscreen);
         xdg_toplevel.events.request_show_window_menu.add(&toplevel.listeners.request_show_window_menu);
+
+        toplevel.xdg_toplevel.base.data = toplevel.scene_tree;
+        toplevel.scene_tree.node.data = toplevel;
 
         return toplevel;
     }
@@ -153,6 +166,12 @@ pub const Toplevel = struct {
 
         std.log.debug("View map: {s}", .{@as([*:0]const u8, @ptrCast(toplevel.xdg_toplevel.title orelse "unnamed"))});
         toplevel.mapped = true;
+        toplevel.updateBorderColor(&toplevel.inactive_border_color);
+        if (toplevel.border_top) |r| r.node.raiseToTop();
+        if (toplevel.border_bottom) |r| r.node.raiseToTop();
+        if (toplevel.border_left) |r| r.node.raiseToTop();
+        if (toplevel.border_right) |r| r.node.raiseToTop();
+
         toplevel.workspace.arrange();
         toplevel.server.focusView(toplevel, toplevel.xdg_toplevel.base.surface);
     }
@@ -217,9 +236,13 @@ pub const Toplevel = struct {
         }
     }
 
-    fn handleDestroy(listener: *wl.Listener(*wlr.Surface), _: *wlr.Surface) void {
+    fn handleDestroy(listener: *wl.Listener(void)) void {
         const listeners: *Listeners = @fieldParentPtr("destroy", listener);
         const toplevel: *Toplevel = @fieldParentPtr("listeners", listeners);
+
+        // Only remove if not already unmapped
+        if (toplevel.link.next != null) toplevel.link.remove();
+        if (toplevel.focus_link.next != null) toplevel.focus_link.remove();
 
         toplevel.listeners.commit.link.remove();
         toplevel.listeners.map.link.remove();
@@ -358,7 +381,7 @@ pub const Popup = struct {
 
     pub const Listeners = struct {
         commit: wl.Listener(*wlr.Surface),
-        destroy: wl.Listener(*wlr.Surface),
+        destroy: wl.Listener(void),
     };
 
     pub fn create(xdg_popup: *wlr.XdgPopup, scene_tree: *wlr.SceneTree) !*Popup {
@@ -370,7 +393,7 @@ pub const Popup = struct {
         popup.listeners.destroy = .init(handleDestroy);
 
         xdg_popup.base.surface.events.commit.add(&popup.listeners.commit);
-        xdg_popup.base.surface.events.destroy.add(&popup.listeners.destroy);
+        xdg_popup.events.destroy.add(&popup.listeners.destroy);
 
         return popup;
     }
@@ -384,7 +407,7 @@ pub const Popup = struct {
         }
     }
 
-    fn handleDestroy(listener: *wl.Listener(*wlr.Surface), _: *wlr.Surface) void {
+    fn handleDestroy(listener: *wl.Listener(void)) void {
         const listeners: *Listeners = @fieldParentPtr("destroy", listener);
         const popup: *Popup = @fieldParentPtr("listeners", listeners);
 

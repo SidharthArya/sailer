@@ -670,15 +670,6 @@ pub const Server = struct {
             return;
         };
 
-        const scene_tree = server.window_tree.createSceneXdgSurface(xdg_toplevel.base) catch {
-            std.heap.c_allocator.destroy(toplevel);
-            return;
-        };
-        toplevel.scene_tree = scene_tree;
-        toplevel.xdg_surface_tree = scene_tree;
-        scene_tree.node.data = toplevel;
-        xdg_toplevel.base.data = scene_tree;
-
         const ws = server.focused_workspace;
         toplevel.workspace = ws;
         
@@ -774,14 +765,18 @@ pub const Server = struct {
         if (server.seat.keyboard_state.focused_surface) |previous_surface| {
             if (previous_surface == surface) return;
             if (wlr.XdgSurface.tryFromWlrSurface(previous_surface)) |xdg_surface| {
-                if (xdg_surface.role_data.toplevel) |prev_t| {
-                    _ = wlr.XdgToplevel.setActivated(prev_t, false);
+                if (xdg_surface.role_data.toplevel) |prev_t_wlr| {
+                    _ = wlr.XdgToplevel.setActivated(prev_t_wlr, false);
+                    if (View.fromXdgSurface(xdg_surface)) |prev_t| {
+                        prev_t.updateBorderColor(&prev_t.inactive_border_color);
+                    }
                 }
             }
         }
 
         server.focused_workspace = toplevel.workspace;
         toplevel.scene_tree.node.raiseToTop();
+        toplevel.updateBorderColor(&toplevel.active_border_color);
         
         toplevel.focus_link.remove();
         toplevel.workspace.focus_history.prepend(toplevel);
