@@ -60,8 +60,8 @@ fn saveStateInner(
     try std.fs.cwd().makePath(dir_path);
 
     // Build window entries
-    var entries = std.ArrayList(WindowEntry).init(allocator);
-    defer entries.deinit();
+    var entries: std.ArrayList(WindowEntry) = .empty;
+    defer entries.deinit(allocator);
 
     var order: u32 = 0;
     var it = workspace.views.link.prev;
@@ -78,7 +78,7 @@ fn saveStateInner(
         else
             "";
 
-        try entries.append(.{
+        try entries.append(allocator, .{
             .app_id = app_id,
             .title = title,
             .width_percent = toplevel.width_percent,
@@ -91,15 +91,15 @@ fn saveStateInner(
     }
 
     // Serialize to JSON manually for fixed field order
-    var buf = std.ArrayList(u8).init(allocator);
-    defer buf.deinit();
-    const writer = buf.writer();
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(allocator);
+    const writer = buf.writer(allocator);
 
     try writer.writeAll("{\"windows\":[");
     for (entries.items, 0..) |entry, i| {
         if (i > 0) try writer.writeByte(',');
         try writer.print(
-            "{{\"app_id\":{s},\"title\":{s},\"width_percent\":{d},\"x\":{d},\"y\":{d},\"is_floating\":{},\"order_index\":{d}}}",
+            "{{\"app_id\":{f},\"title\":{f},\"width_percent\":{d},\"x\":{d},\"y\":{d},\"is_floating\":{},\"order_index\":{d}}}",
             .{
                 std.json.fmt(entry.app_id, .{}),
                 std.json.fmt(entry.title, .{}),
@@ -168,14 +168,14 @@ fn restoreStateInner(
     if (state.windows.len == 0) return;
 
     // Collect current toplevels into a flat array preserving original order
-    var all_toplevels = std.ArrayList(*View.Toplevel).init(allocator);
-    defer all_toplevels.deinit();
+    var all_toplevels: std.ArrayList(*View.Toplevel) = .empty;
+    defer all_toplevels.deinit(allocator);
 
     var it = workspace.views.link.prev;
     while (it != &workspace.views.link) : (it = it.?.prev) {
         const toplevel: *View.Toplevel = @fieldParentPtr("link", it.?);
         if (!toplevel.mapped) continue;
-        try all_toplevels.append(toplevel);
+        try all_toplevels.append(allocator, toplevel);
     }
 
     // Pass 1: match entries to toplevels (one-to-one, app_id primary, title secondary)
@@ -224,14 +224,14 @@ fn restoreStateInner(
     }
 
     // Pass 2: build final order — matched in order_index order, then unmatched in original order
-    var final_order = std.ArrayList(*View.Toplevel).init(allocator);
-    defer final_order.deinit();
+    var final_order: std.ArrayList(*View.Toplevel) = .empty;
+    defer final_order.deinit(allocator);
 
     for (windows_copy, 0..) |_, ei| {
-        if (matched[ei]) |t| try final_order.append(t);
+        if (matched[ei]) |t| try final_order.append(allocator, t);
     }
     for (all_toplevels.items, 0..) |toplevel, ti| {
-        if (!consumed[ti]) try final_order.append(toplevel);
+        if (!consumed[ti]) try final_order.append(allocator, toplevel);
     }
 
     // Pass 3: apply fields to matched toplevels

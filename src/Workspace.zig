@@ -166,27 +166,45 @@ pub const Workspace = struct {
     pub fn focusRelative(self: *Workspace, delta: i32) void {
         if (self.views.link.next == &self.views.link) return;
 
-        // Find focused view
+        // Find focused view — use focus_history as it's more reliable than seat surface lookup
         var focused: ?*View.Toplevel = null;
-        if (self.server.seat.keyboard_state.focused_surface) |surf| {
-            if (wlr.XdgSurface.tryFromWlrSurface(surf)) |xdg_surf| {
-                focused = View.fromXdgSurface(xdg_surf);
+        var it = self.focus_history.link.next;
+        while (it != &self.focus_history.link) : (it = it.?.next) {
+            const candidate: *View.Toplevel = @fieldParentPtr("focus_link", it.?);
+            if (candidate.mapped and !candidate.hidden) {
+                focused = candidate;
+                break;
             }
         }
 
+        std.debug.print("focusRelative: delta={} focused={s}\n", .{
+            delta,
+            if (focused) |f| @as([*:0]const u8, @ptrCast(f.xdg_toplevel.title orelse "unnamed")) else "null",
+        });
+
         if (focused) |f| {
-            var target_link: *wl.list.Link = undefined;
             if (delta > 0) {
-                target_link = f.link.next.?;
-                if (target_link == &self.views.link) target_link = self.views.link.next.?;
+                // focus_right: visually rightmost = link.prev direction in ribbon
+                const target = f.link.prev.?;
+                if (target == &self.views.link) {
+                    self.ensureViewVisible(f);
+                    return;
+                }
+                const next_v: *View.Toplevel = @fieldParentPtr("link", target);
+                std.debug.print("focusRelative: moving right to {s}\n", .{@as([*:0]const u8, @ptrCast(next_v.xdg_toplevel.title orelse "unnamed"))});
+                self.server.focusView(next_v, next_v.xdg_toplevel.base.surface);
             } else {
-                target_link = f.link.prev.?;
-                if (target_link == &self.views.link) target_link = self.views.link.prev.?;
+                // focus_left: visually leftmost = link.next direction in ribbon
+                const target = f.link.next.?;
+                if (target == &self.views.link) {
+                    self.ensureViewVisible(f);
+                    return;
+                }
+                const prev_v: *View.Toplevel = @fieldParentPtr("link", target);
+                std.debug.print("focusRelative: moving left to {s}\n", .{@as([*:0]const u8, @ptrCast(prev_v.xdg_toplevel.title orelse "unnamed"))});
+                self.server.focusView(prev_v, prev_v.xdg_toplevel.base.surface);
             }
-            const next_v: *View.Toplevel = @fieldParentPtr("link", target_link);
-            self.server.focusView(next_v, next_v.xdg_toplevel.base.surface);
         } else {
-            // Just focus head
             const head = self.views.link.next.?;
             const toplevel: *View.Toplevel = @fieldParentPtr("link", head);
             self.server.focusView(toplevel, toplevel.xdg_toplevel.base.surface);
