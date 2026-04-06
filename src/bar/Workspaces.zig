@@ -21,9 +21,7 @@ pub const Workspaces = struct {
 
             const is_active_here = blk: {
                 if (ws.visible_on) |out| {
-                    const ws_name = std.mem.span(out.wlr_output.name.?);
-                    const bar_name = std.mem.span(bar.output.wlr_output.name.?);
-                    break :blk std.mem.eql(u8, ws_name, bar_name);
+                    break :blk std.mem.eql(u8, std.mem.span(out.wlr_output.name), std.mem.span(bar.output.wlr_output.name));
                 }
                 break :blk false;
             };

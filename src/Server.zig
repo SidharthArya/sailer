@@ -547,18 +547,16 @@ pub const Server = struct {
                 }
                 // In Spanned/Mirror, only the focused workspace should be enabled globally
                 if (server.display_mode != .discrete) {
-                    ws.scene_tree.node.setEnabled(ws == server.focused_workspace);
+                    const visible = (ws == server.focused_workspace);
+                    ws.scene_tree.node.setEnabled(visible);
                 } else {
                     ws.scene_tree.node.setEnabled(true);
                 }
                 ws.arrange();
-            } else if (server.display_mode != .discrete and ws == server.focused_workspace) {
-                // Spanned/Mirror: focused workspace is always visible at origin
-                ws.scene_tree.node.setPosition(0, 0);
-                ws.scene_tree.node.setEnabled(true);
-                ws.arrange();
             } else {
+                // HIDDEN WORKSPACE: Disable and move to off-screen limbo to avoid bleeding
                 ws.scene_tree.node.setEnabled(false);
+                ws.scene_tree.node.setPosition(-32000, -32000);
             }
         }
 
@@ -1234,8 +1232,30 @@ pub const Server = struct {
             current_ws.setVisible(other_output);
             target_ws.setVisible(focused_output);
         } else if (focused_output) |output| {
+            // Target is currently invisible. Clear old visibility to ensure mutual exclusivity.
             current_ws.setVisible(null);
             target_ws.setVisible(output);
+        } else {
+            // If the current monitor didn't have a workspace (rare), just force it
+            if (server.output_layout.outputAt(server.cursor.x, server.cursor.y)) |wlr_out| {
+                var oit = server.outputs.link.next;
+                while (oit != &server.outputs.link) : (oit = oit.?.next) {
+                    const out: *Output = @fieldParentPtr("link", oit.?);
+                    if (out.wlr_output == wlr_out) {
+                        target_ws.setVisible(out);
+                        break;
+                    }
+                }
+            }
+        }
+        
+        // Ensure no other workspace thinks it's on the target's new output
+        if (target_ws.visible_on) |new_out| {
+            for (server.workspaces) |ws| {
+                if (ws != target_ws and ws.visible_on == new_out) {
+                    ws.visible_on = null;
+                }
+            }
         }
 
         // Move sticky windows from current to target
