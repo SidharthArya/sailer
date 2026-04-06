@@ -70,9 +70,6 @@ pub const Ribbon = struct {
         }
 
         self.clampScroll(ws, box);
-
-        // Apply scroll offset and constrained layer shell position (usable area)
-        ws.scene_tree.node.setPosition(box.x + ws.scroll_offset_x, box.y);
     }
     fn clampScroll(_: *Ribbon, ws: *Workspace, box: wlr.Box) void {
         // Never allow positive scroll (pushed to right)
@@ -106,32 +103,29 @@ pub const Ribbon = struct {
             ws.server.output_layout.getBox(null, &box);
         } else if (ws.visible_on) |output| {
             ws.server.output_layout.getBox(output.wlr_output, &box);
-        } else return;
-
-        if (box.width <= 0) return;
-
-        const width: i32 = @divTrunc(box.width * view.width_percent, 100);
-        const view_x_start = view.x;
-        const view_x_end = view.x + width;
-
-        const visible_x_start = -ws.scroll_offset_x;
-        const visible_x_end = -ws.scroll_offset_x + box.width;
-
-        var new_scroll = ws.scroll_offset_x;
-
-        // If the view is completely or partially off-screen
-        if (view_x_start < visible_x_start) {
-            // Priority 1: Align left edge
-            new_scroll = -view_x_start;
-        } else if (view_x_end > visible_x_end) {
-            // Priority 2: Align right edge
-            new_scroll = box.width - view_x_end;
+        } else {
+            std.log.err("ensureViewVisible: no output, skipping", .{});
+            return;
         }
+
+        if (box.width <= 0) {
+            std.log.err("ensureViewVisible: box.width={} <= 0, skipping", .{box.width});
+            return;
+        }
+
+        const view_width: i32 = @divTrunc(box.width * view.width_percent, 100);
+
+        // Center the focused view on screen
+        const new_scroll = @divTrunc(box.width - view_width, 2) - view.x;
+
+        std.log.err("ensureViewVisible: view.x={} view_width={} box.width={} cur_scroll={} new_scroll={}", .{
+            view.x, view_width, box.width, ws.scroll_offset_x, new_scroll,
+        });
 
         if (new_scroll != ws.scroll_offset_x) {
             ws.scroll_offset_x = new_scroll;
             self.clampScroll(ws, box);
-            std.log.info("info(sailer): Workspace '{s}' scrolling to focus: {} (View at {})", .{ ws.name, ws.scroll_offset_x, view_x_start });
+            std.log.err("ensureViewVisible: applied scroll={}", .{ws.scroll_offset_x});
             ws.arrange();
         }
     }

@@ -69,9 +69,7 @@ pub const SmartView = struct {
 
             view.x = vx;
             view.y = vy;
-            i += 1;
+        i += 1;
         }
-
-        ws.scene_tree.node.setPosition(box.x, box.y);
     }
 };

@@ -31,7 +31,6 @@ pub const Tiling = struct {
         }
 
         if (count == 0) {
-            ws.scene_tree.node.setPosition(box.x, box.y);
             return;
         }
 
@@ -81,7 +80,6 @@ pub const Tiling = struct {
             }
         }
 
-        ws.scene_tree.node.setPosition(box.x, box.y);
     }
 
     /// Increase or decrease the master ratio by a step.

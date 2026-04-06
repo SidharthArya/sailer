@@ -4,7 +4,7 @@ const View = @import("../View.zig");
 const Workspace = @import("../Workspace.zig").Workspace;
 
 pub const Floating = struct {
-    pub fn arrange(_: *Floating, ws: *Workspace, box: wlr.Box) void {
+    pub fn arrange(_: *Floating, ws: *Workspace, _: wlr.Box) void {
         var it = ws.views.link.prev;
         while (it != &ws.views.link) : (it = it.?.prev) {
             const view: *View.Toplevel = @fieldParentPtr("link", it.?);
@@ -14,6 +14,5 @@ pub const Floating = struct {
             view.scene_tree.node.setPosition(view.x, view.y);
         }
 
-        ws.scene_tree.node.setPosition(box.x, box.y);
     }
 };

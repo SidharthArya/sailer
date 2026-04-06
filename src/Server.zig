@@ -232,6 +232,7 @@ pub const Server = struct {
             break :blk Config.default(std.heap.c_allocator) catch unreachable;
         };
         // TODO: Watch config file for changes and hot-reload without restarting.
+        server.display_mode = server.config.default_display_mode;
         server.bar_height = if (server.config.bar.enabled and server.config.bar.exclusive) server.config.bar.height else 0;
 
         server.bar_timer = try loop.addTimer(*Server, handleBarTimer, server);
@@ -666,12 +667,23 @@ pub const Server = struct {
         const listeners: *Server.Listeners = @fieldParentPtr("new_xdg_toplevel", listener);
         const server: *Server = @fieldParentPtr("listeners", listeners);
 
-        const toplevel = Toplevel.create(server, xdg_toplevel) catch {
-            return;
+        // Assign new window to the workspace on the output under the cursor.
+        const ws = blk: {
+            if (server.display_mode == .discrete) {
+                if (server.output_layout.outputAt(server.cursor.x, server.cursor.y)) |wlr_out| {
+                    for (server.workspaces) |w| {
+                        if (w.visible_on != null and w.visible_on.?.wlr_output == wlr_out) {
+                            break :blk w;
+                        }
+                    }
+                }
+            }
+            break :blk server.focused_workspace;
         };
 
-        const ws = server.focused_workspace;
-        toplevel.workspace = ws;
+        const toplevel = Toplevel.create(server, ws, xdg_toplevel) catch {
+            return;
+        };
         
         // Add to workspace list immediately so link is valid for remove() later
         ws.views.prepend(toplevel);
@@ -790,30 +802,9 @@ pub const Server = struct {
         }
 
         const ws = toplevel.workspace;
-        const s = server;
-        if (s.display_mode == .discrete) {
-            if (ws.visible_on) |output| {
-                var box: wlr.Box = undefined;
-                s.output_layout.getBox(output.wlr_output, &box);
-                const view_width = @divTrunc(box.width * toplevel.width_percent, 100);
-                ws.scroll_offset_x = @as(i32, @divTrunc(box.width - view_width, 2)) - toplevel.x;
-            }
-        } else {
-            var output = s.output_layout.outputAt(s.cursor.x, s.cursor.y);
-            if (output == null) {
-                if (s.outputs.link.next != &s.outputs.link) {
-                    output = (@as(*Output, @fieldParentPtr("link", s.outputs.link.next.?))).wlr_output;
-                }
-            }
-
-            if (output) |o| {
-                var box: wlr.Box = undefined;
-                s.output_layout.getBox(o, &box);
-                const view_width = @divTrunc(box.width * toplevel.width_percent, 100);
-                ws.scroll_offset_x = @as(i32, @divTrunc(box.width - view_width, 2)) - (toplevel.x - box.x);
-            }
-        }
         ws.arrange();
+        ws.ensureViewVisible(toplevel);
+        server.refreshBars();
     }
 
     pub fn focusLayer(server: *Server, layer: *LayerSurface) void {
@@ -847,6 +838,7 @@ pub const Server = struct {
             }
         }
         wlr.Seat.keyboardNotifyClearFocus(server.seat);
+        server.refreshBars();
     }
 
     fn newInput(listener: *wl.Listener(*wlr.InputDevice), device: *wlr.InputDevice) void {
@@ -951,6 +943,21 @@ pub const Server = struct {
             return;
         }
 
+        // In discrete mode, update focused_workspace to follow the cursor across outputs.
+        if (server.display_mode == .discrete) {
+            if (server.output_layout.outputAt(server.cursor.x, server.cursor.y)) |wlr_out| {
+                for (server.workspaces) |ws| {
+                    if (ws.visible_on != null and ws.visible_on.?.wlr_output == wlr_out) {
+                        if (server.focused_workspace != ws) {
+                            server.focused_workspace = ws;
+                            server.refreshBars();
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
         if (server.active_menu) |menu| {
             menu.handleMotion(server.cursor.x, server.cursor.y);
             return;
@@ -981,8 +988,13 @@ pub const Server = struct {
             },
             .move => {
                 const toplevel = server.grabbed_view.?;
-                toplevel.x = @as(i32, @intFromFloat(server.cursor.x - server.grab_x));
-                toplevel.y = @as(i32, @intFromFloat(server.cursor.y - server.grab_y));
+                var ws_box: wlr.Box = .{ .x = 0, .y = 0, .width = 0, .height = 0 };
+                if (toplevel.workspace.visible_on) |output| {
+                    server.output_layout.getBox(output.wlr_output, &ws_box);
+                }
+                
+                toplevel.x = @as(i32, @intFromFloat(server.cursor.x - server.grab_x)) - ws_box.x;
+                toplevel.y = @as(i32, @intFromFloat(server.cursor.y - server.grab_y)) - ws_box.y;
                 toplevel.scene_tree.node.setPosition(toplevel.x, toplevel.y);
             },
             .resize => {
@@ -1197,13 +1209,28 @@ pub const Server = struct {
     pub fn switchToWorkspace(server: *Server, index: u32) void {
         if (index >= server.workspaces.len) return;
         const target_ws = server.workspaces[index];
-        if (server.focused_workspace == target_ws) return;
 
-        const current_ws = server.focused_workspace;
+        // In discrete mode, switch the workspace on the output under the cursor,
+        // not necessarily the keyboard-focused output.
+        const current_ws = blk: {
+            if (server.display_mode == .discrete) {
+                if (server.output_layout.outputAt(server.cursor.x, server.cursor.y)) |wlr_out| {
+                    for (server.workspaces) |ws| {
+                        if (ws.visible_on != null and ws.visible_on.?.wlr_output == wlr_out) {
+                            break :blk ws;
+                        }
+                    }
+                }
+            }
+            break :blk server.focused_workspace;
+        };
+
+        if (current_ws == target_ws) return;
+
         const focused_output = current_ws.visible_on;
 
         if (target_ws.visible_on) |other_output| {
-            // Swap workspaces between outputs
+            // Target is already visible on another output — swap
             current_ws.setVisible(other_output);
             target_ws.setVisible(focused_output);
         } else if (focused_output) |output| {
@@ -1236,6 +1263,7 @@ pub const Server = struct {
         } else {
             wlr.Seat.keyboardNotifyClearFocus(server.seat);
         }
+        server.refreshBars();
     }
 
     fn executeAction(server: *Server, action: Action, kb: Keybinding, target: ?*Toplevel) void {

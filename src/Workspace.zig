@@ -5,6 +5,7 @@ const Server = @import("Server.zig").Server;
 const View = @import("View.zig");
 const Layout = @import("layouts/index.zig").Layout;
 const LayerSurface = @import("LayerShell.zig").LayerSurface;
+const LayoutKind = @import("Config.zig").LayoutKind;
 
 pub const Workspace = struct {
     server: *Server,
@@ -25,14 +26,18 @@ pub const Workspace = struct {
         const workspace = try std.heap.c_allocator.create(Workspace);
         const scene_tree = try server.window_tree.createSceneTree();
         scene_tree.node.setEnabled(true);
+        const initial_layout: Layout = switch (server.config.default_layout) {
+            .ribbon => .{ .ribbon = .{} },
+            .tiling => .{ .tiling = .{} },
+            .floating => .{ .floating = .{} },
+            .smart_view => .{ .smart_view = .{} },
+        };
         workspace.* = .{
             .server = server,
             .name = name,
-            // Create a dedicated scene tree for this workspace.
-            // All windows in this workspace will be children of this tree.
             .scene_tree = scene_tree,
             .visible_on = null,
-            .layout = .{ .ribbon = .{} },
+            .layout = initial_layout,
         };
         workspace.views.init();
         workspace.focus_history.init();
@@ -56,8 +61,14 @@ pub const Workspace = struct {
                 var full_box: wlr.Box = .{ .x = 0, .y = 0, .width = 0, .height = 0 };
                 if (self.server.display_mode == .spanned) {
                     self.server.output_layout.getBox(null, &full_box);
+                    // Workspace-relative equivalent of its own absolute position is (0,0) as its node is at (0,0) in spanned mode
+                    full_box.x = 0;
+                    full_box.y = 0;
                 } else if (self.visible_on) |output| {
                     self.server.output_layout.getBox(output.wlr_output, &full_box);
+                    // Workspace-relative equivalent of its own absolute position is (0,0) as its node is at (output.x, output.y)
+                    full_box.x = 0;
+                    full_box.y = 0;
                 }
 
                 toplevel.x = full_box.x;
@@ -92,6 +103,10 @@ pub const Workspace = struct {
             self.server.output_layout.getBox(null, &box);
         } else if (self.visible_on) |output| {
             self.server.output_layout.getBox(output.wlr_output, &box);
+            if (self.server.display_mode == .discrete) {
+                box.x = 0;
+                box.y = 0;
+            }
         } else return box;
 
         if (box.width <= 0 or box.height <= 0) return box;

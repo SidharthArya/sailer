@@ -51,11 +51,11 @@ pub const Toplevel = struct {
         request_show_window_menu: wl.Listener(*wlr.XdgToplevel.event.ShowWindowMenu),
     };
 
-    pub fn create(server: *Server, xdg_toplevel: *wlr.XdgToplevel) !*Toplevel {
+    pub fn create(server: *Server, workspace: *@import("Workspace.zig").Workspace, xdg_toplevel: *wlr.XdgToplevel) !*Toplevel {
         const toplevel = try std.heap.c_allocator.create(Toplevel);
         toplevel.* = .{
             .server = server,
-            .workspace = server.focused_workspace,
+            .workspace = workspace,
             .xdg_toplevel = xdg_toplevel,
             .scene_tree = undefined,
             .xdg_surface_tree = undefined,
@@ -63,7 +63,7 @@ pub const Toplevel = struct {
             .border_width = 2,
         };
 
-        const scene_tree = server.window_tree.createSceneTree() catch return error.SceneTreeCreationFailed;
+        const scene_tree = workspace.scene_tree.createSceneTree() catch return error.SceneTreeCreationFailed;
         toplevel.scene_tree = scene_tree;
         toplevel.xdg_surface_tree = scene_tree.createSceneXdgSurface(xdg_toplevel.base) catch return error.SceneTreeCreationFailed;
 
@@ -270,8 +270,16 @@ pub const Toplevel = struct {
         const server = toplevel.server;
         server.grabbed_view = toplevel;
         server.cursor_mode = .move;
-        server.grab_x = server.cursor.x - @as(f64, @floatFromInt(toplevel.x));
-        server.grab_y = server.cursor.y - @as(f64, @floatFromInt(toplevel.y));
+
+        // Account for workspace offset in grab calculation.
+        // Absolute window x = workspace.x + toplevel.x
+        var ws_box: wlr.Box = .{ .x = 0, .y = 0, .width = 0, .height = 0 };
+        if (toplevel.workspace.visible_on) |output| {
+            server.output_layout.getBox(output.wlr_output, &ws_box);
+        }
+
+        server.grab_x = server.cursor.x - @as(f64, @floatFromInt(ws_box.x + toplevel.x));
+        server.grab_y = server.cursor.y - @as(f64, @floatFromInt(ws_box.y + toplevel.y));
     }
 
     fn handleRequestResize(
@@ -290,8 +298,13 @@ pub const Toplevel = struct {
 
         const box = toplevel.xdg_toplevel.base.geometry;
 
-        const border_x = toplevel.x + box.x + if (event.edges.right) box.width else 0;
-        const border_y = toplevel.y + box.y + if (event.edges.bottom) box.height else 0;
+        var ws_box: wlr.Box = .{ .x = 0, .y = 0, .width = 0, .height = 0 };
+        if (toplevel.workspace.visible_on) |output| {
+            server.output_layout.getBox(output.wlr_output, &ws_box);
+        }
+
+        const border_x = ws_box.x + toplevel.x + box.x + if (event.edges.right) box.width else 0;
+        const border_y = ws_box.y + toplevel.y + box.y + if (event.edges.bottom) box.height else 0;
         server.grab_x = server.cursor.x - @as(f64, @floatFromInt(border_x));
         server.grab_y = server.cursor.y - @as(f64, @floatFromInt(border_y));
 

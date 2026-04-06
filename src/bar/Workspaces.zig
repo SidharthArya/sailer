@@ -14,28 +14,42 @@ pub const Workspaces = struct {
         pixels: [*]u32,
         x_offset: *i32,
     ) void {
-        // TODO: Workspace slot width (26px) and spacing (32px) are hardcoded — derive from font metrics or config.
         const server = bar.server;
         for (server.workspaces, 1..) |ws, i| {
             var label_buf: [4]u8 = undefined;
             const label = std.fmt.bufPrint(&label_buf, " {d} ", .{i}) catch " ?";
 
-            const is_focused = (server.focused_workspace == ws);
+            const is_active_here = blk: {
+                if (ws.visible_on) |out| {
+                    const ws_name = std.mem.span(out.wlr_output.name.?);
+                    const bar_name = std.mem.span(bar.output.wlr_output.name.?);
+                    break :blk std.mem.eql(u8, ws_name, bar_name);
+                }
+                break :blk false;
+            };
+            const is_globally_focused = (server.focused_workspace == ws);
             const has_views = (ws.views.link.next != &ws.views.link);
 
-            if (is_focused) {
-                // Focus highlight (Mauve)
+            if (is_active_here) {
+                // Main highlight for workspace on THIS monitor (Mauve)
+                // Enlarge slightly for better visibility
                 _ = c.pixman_image_fill_rectangles(c.PIXMAN_OP_OVER, pix, &Theme.mauve, 1, &[_]c.pixman_rectangle16_t{.{
                     .x = @intCast(x_offset.*),
-                    .y = 3,
-                    .width = 26,
-                    .height = @intCast(bar.height - 6),
+                    .y = 1,
+                    .width = 28,
+                    .height = @intCast(bar.height - 2),
                 }});
-                bar.drawText(pixels, label, x_offset.*, 17, Theme.base);
+                
+                // FORCE MAXIMUM CONTRAST: Use Base (Pitch Black) for focused, Blue for active-unfocused
+                const text_color = if (is_globally_focused) Theme.base else Theme.blue;
+                bar.drawText(pixels, label, x_offset.* + 2, 17, text_color);
+            } else if (is_globally_focused) {
+                // Highlight text only for globally focused workspace on ANOTHER monitor
+                bar.drawText(pixels, label, x_offset.* + 2, 17, Theme.mauve);
             } else if (has_views) {
-                bar.drawText(pixels, label, x_offset.*, 17, Theme.pink);
+                bar.drawText(pixels, label, x_offset.* + 2, 17, Theme.pink);
             } else {
-                bar.drawText(pixels, label, x_offset.*, 17, Theme.subtext);
+                bar.drawText(pixels, label, x_offset.* + 2, 17, Theme.subtext);
             }
 
             x_offset.* += 32;

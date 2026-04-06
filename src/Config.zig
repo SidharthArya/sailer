@@ -48,6 +48,13 @@ pub const FocusOnClose = enum {
     last,
 };
 
+pub const LayoutKind = enum {
+    ribbon,
+    tiling,
+    floating,
+    smart_view,
+};
+
 pub const BarConfig = struct {
     enabled: bool = true,
     exclusive: bool = true,
@@ -122,6 +129,8 @@ pub const Config = struct {
     split_ratio: f32 = 0.5,
     gap: i32 = 20,
     focus_on_close: FocusOnClose = .previous,
+    default_layout: LayoutKind = .ribbon,
+    default_display_mode: DisplayMode = .discrete,
     bar: BarConfig = .{},
     repeat_rate: u32 = 25,
     repeat_delay: u32 = 600,
