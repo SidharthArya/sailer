@@ -27,13 +27,6 @@ pub fn main() anyerror!void {
         std.log.warn("XDG_RUNTIME_DIR is NOT set! Wayland clients will fail to connect.", .{});
     }
 
-    // Prevent zombie processes from children
-    var sa = std.posix.Sigaction{
-        .handler = .{ .handler = std.posix.SIG.IGN },
-        .mask = std.posix.sigemptyset(),
-        .flags = std.posix.SA.NOCLDWAIT,
-    };
-    std.posix.sigaction(std.posix.SIG.CHLD, &sa, null);
     
     try server.backend.start();
     std.log.info("Backend started, Wayland socket: {s}", .{server.socket_name});

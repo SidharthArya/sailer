@@ -35,6 +35,7 @@ pub const Action = enum {
     toggle_floating_layout,
     toggle_tiling_layout,
     toggle_ribbon_layout,
+    reload_config,
 };
 
 pub const DisplayMode = enum {

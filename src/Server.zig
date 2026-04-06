@@ -87,6 +87,7 @@ pub const Server = struct {
     current_sequence: std.ArrayListUnmanaged(KeyMatch) = .{},
     sequence_timer: *wl.EventSource = undefined,
     bar_timer: *wl.EventSource = undefined,
+    sigchld_source: *wl.EventSource = undefined,
     device_map: std.AutoHashMapUnmanaged(*wlr.InputDevice, void) = .{},
 
     last_mod_tap_ready: bool = false,
@@ -237,6 +238,8 @@ pub const Server = struct {
 
         server.bar_timer = try loop.addTimer(*Server, handleBarTimer, server);
         server.bar_timer.timerUpdate(1000) catch {}; // First update in 1s
+
+        server.sigchld_source = try loop.addSignal(*Server, std.posix.SIG.CHLD, handleSigChld, server);
 
         try server.renderer.initServer(wl_server);
         _ = try wlr.Compositor.create(server.wl_server, 6, server.renderer);
@@ -578,6 +581,17 @@ pub const Server = struct {
         }
     }
 
+    fn handleSigChld(sig: i32, _: *Server) c_int {
+        _ = sig;
+        while (true) {
+            var status: i32 = 0;
+            // Use the low-level system call to avoid Zig's waitpid wrapper which panics on ECHILD (no more children)
+            const rc = std.posix.system.waitpid(-1, &status, std.posix.W.NOHANG);
+            if (rc <= 0) break;
+        }
+        return 0;
+    }
+
     pub fn openMenu(self: *Server, toplevel: *Toplevel, gx: i32, gy: i32) void {
         if (self.active_menu) |menu| {
             menu.deinit();
@@ -595,6 +609,22 @@ pub const Server = struct {
         }
     }
 
+    pub fn reloadConfig(server: *Server) void {
+        std.log.info("Reloading configuration...", .{});
+        const new_config = @import("Config.zig").Config.load(std.heap.c_allocator) catch |err| {
+            std.log.err("Failed to reload config: {}, keeping old config", .{err});
+            return;
+        };
+        
+        server.config = new_config;
+        server.bar_height = if (server.config.bar.enabled and server.config.bar.exclusive) server.config.bar.height else 0;
+        
+        // Apply potentially changed settings like gaps
+        server.updateLayout();
+        server.refreshBars();
+        std.log.info("Configuration reloaded successfully.", .{});
+    }
+
     pub fn deinit(server: *Server) void {
         server.wl_server.destroyClients();
 
@@ -610,6 +640,9 @@ pub const Server = struct {
         server.listeners.cursor_axis.link.remove();
         server.listeners.cursor_frame.link.remove();
         server.listeners.new_layer_surface.link.remove();
+
+        server.bar_timer.remove();
+        server.sigchld_source.remove();
 
         // Stop IPC before destroying the event loop it registered with.
         if (server.ipc) |ipc| ipc.deinit();
@@ -1414,6 +1447,7 @@ pub const Server = struct {
                 }
                 t.workspace.arrange();
             },
+            .reload_config => server.reloadConfig(),
         }
     }
 
