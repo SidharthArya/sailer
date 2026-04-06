@@ -22,6 +22,7 @@ const LayerSurface = @import("LayerShell.zig").LayerSurface;
 const Menu = @import("Menu.zig").Menu;
 const SessionLock = @import("SessionLock.zig").SessionLock;
 const Bar = @import("Bar.zig").Bar;
+const LayoutState = @import("LayoutState.zig");
 const c = @import("c.zig").c;
 
 pub const KeyMatch = struct {
@@ -1330,22 +1331,31 @@ pub const Server = struct {
         switch (action) {
             .toggle_layout => {
                 const ws = server.focused_workspace;
-                if (ws.layout == .ribbon) {
-                    ws.layout = .{ .tiling = .{} };
-                } else {
-                    ws.layout = .{ .ribbon = .{} };
+                const outgoing = ws.layout;
+                const new_layout: @import("layouts/index.zig").Layout = if (ws.layout == .ribbon)
+                    .{ .tiling = .{} }
+                else
+                    .{ .ribbon = .{} };
+                if (std.meta.activeTag(outgoing) != std.meta.activeTag(new_layout)) {
+                    LayoutState.saveState(std.heap.c_allocator, ws, outgoing);
+                    ws.layout = new_layout;
+                    LayoutState.restoreState(std.heap.c_allocator, ws, new_layout);
                 }
                 ws.arrange();
             },
             .toggle_floating_layout => {
                 const ws = server.focused_workspace;
+                const outgoing = ws.layout;
                 if (ws.layout == .floating) {
-                    ws.layout = ws.prev_layout orelse .{ .ribbon = .{} };
+                    const new_layout = ws.prev_layout orelse @import("layouts/index.zig").Layout{ .ribbon = .{} };
                     ws.prev_layout = null;
                     ws.scroll_offset_x = 0;
+                    LayoutState.saveState(std.heap.c_allocator, ws, outgoing);
+                    ws.layout = new_layout;
+                    LayoutState.restoreState(std.heap.c_allocator, ws, new_layout);
                 } else {
                     ws.prev_layout = ws.layout;
-                    ws.layout = .{ .floating = .{} };
+                    const new_layout = @import("layouts/index.zig").Layout{ .floating = .{} };
                     const box = ws.getUsableArea();
                     var offset: i32 = 0;
                     var it = ws.views.link.next;
@@ -1358,36 +1368,62 @@ pub const Server = struct {
                             offset += 30;
                         }
                     }
+                    LayoutState.saveState(std.heap.c_allocator, ws, outgoing);
+                    ws.layout = new_layout;
+                    LayoutState.restoreState(std.heap.c_allocator, ws, new_layout);
                 }
                 ws.arrange();
             },
             .toggle_tiling_layout => {
                 const ws = server.focused_workspace;
+                const outgoing = ws.layout;
                 if (ws.layout == .tiling) {
-                    ws.layout = ws.prev_layout orelse .{ .ribbon = .{} };
+                    const new_layout = ws.prev_layout orelse @import("layouts/index.zig").Layout{ .ribbon = .{} };
                     ws.prev_layout = null;
                     ws.scroll_offset_x = 0;
+                    LayoutState.saveState(std.heap.c_allocator, ws, outgoing);
+                    ws.layout = new_layout;
+                    LayoutState.restoreState(std.heap.c_allocator, ws, new_layout);
                 } else {
                     ws.prev_layout = ws.layout;
-                    ws.layout = .{ .tiling = .{} };
+                    const new_layout = @import("layouts/index.zig").Layout{ .tiling = .{} };
+                    LayoutState.saveState(std.heap.c_allocator, ws, outgoing);
+                    ws.layout = new_layout;
+                    LayoutState.restoreState(std.heap.c_allocator, ws, new_layout);
                 }
                 ws.arrange();
             },
             .toggle_ribbon_layout => {
                 const ws = server.focused_workspace;
+                const outgoing = ws.layout;
                 if (ws.layout == .ribbon) {
-                    ws.layout = ws.prev_layout orelse .{ .tiling = .{} };
+                    const new_layout = ws.prev_layout orelse @import("layouts/index.zig").Layout{ .tiling = .{} };
                     ws.prev_layout = null;
+                    LayoutState.saveState(std.heap.c_allocator, ws, outgoing);
+                    ws.layout = new_layout;
+                    LayoutState.restoreState(std.heap.c_allocator, ws, new_layout);
                 } else {
                     ws.prev_layout = ws.layout;
-                    ws.layout = .{ .ribbon = .{} };
+                    const new_layout = @import("layouts/index.zig").Layout{ .ribbon = .{} };
                     ws.scroll_offset_x = 0;
+                    LayoutState.saveState(std.heap.c_allocator, ws, outgoing);
+                    ws.layout = new_layout;
+                    LayoutState.restoreState(std.heap.c_allocator, ws, new_layout);
                 }
                 ws.arrange();
             },
             .smart_view => {
                 const ws = server.focused_workspace;
-                ws.layout = if (ws.layout == .smart_view) .{ .ribbon = .{} } else .{ .smart_view = .{} };
+                const outgoing = ws.layout;
+                const new_layout: @import("layouts/index.zig").Layout = if (ws.layout == .smart_view)
+                    .{ .ribbon = .{} }
+                else
+                    .{ .smart_view = .{} };
+                if (std.meta.activeTag(outgoing) != std.meta.activeTag(new_layout)) {
+                    LayoutState.saveState(std.heap.c_allocator, ws, outgoing);
+                    ws.layout = new_layout;
+                    LayoutState.restoreState(std.heap.c_allocator, ws, new_layout);
+                }
                 ws.arrange();
             },
             .terminate => {
