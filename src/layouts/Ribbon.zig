@@ -17,8 +17,8 @@ pub const Ribbon = struct {
             }
             view.scene_tree.node.setEnabled(true);
 
-            // Floating windows stay at their own x/y (unaffected by ribbon layout)
-            if (view.is_floating) {
+            // Floating windows or the currently grabbed window stay at their own x/y
+            if (view.is_floating or view.server.grabbed_view == view) {
                 view.scene_tree.node.setPosition(view.x, view.y);
                 continue;
             }

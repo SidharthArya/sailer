@@ -177,31 +177,18 @@ pub const Workspace = struct {
             }
         }
 
-        std.debug.print("focusRelative: delta={} focused={s}\n", .{
-            delta,
-            if (focused) |f| @as([*:0]const u8, @ptrCast(f.xdg_toplevel.title orelse "unnamed")) else "null",
-        });
-
         if (focused) |f| {
             if (delta > 0) {
-                // focus_right: visually rightmost = link.prev direction in ribbon
+                // focus_right: ribbon iterates link.prev left-to-right, so right = link.prev
                 const target = f.link.prev.?;
-                if (target == &self.views.link) {
-                    self.ensureViewVisible(f);
-                    return;
-                }
+                if (target == &self.views.link) { self.ensureViewVisible(f); return; }
                 const next_v: *View.Toplevel = @fieldParentPtr("link", target);
-                std.debug.print("focusRelative: moving right to {s}\n", .{@as([*:0]const u8, @ptrCast(next_v.xdg_toplevel.title orelse "unnamed"))});
                 self.server.focusView(next_v, next_v.xdg_toplevel.base.surface);
             } else {
-                // focus_left: visually leftmost = link.next direction in ribbon
+                // focus_left: left = link.next
                 const target = f.link.next.?;
-                if (target == &self.views.link) {
-                    self.ensureViewVisible(f);
-                    return;
-                }
+                if (target == &self.views.link) { self.ensureViewVisible(f); return; }
                 const prev_v: *View.Toplevel = @fieldParentPtr("link", target);
-                std.debug.print("focusRelative: moving left to {s}\n", .{@as([*:0]const u8, @ptrCast(prev_v.xdg_toplevel.title orelse "unnamed"))});
                 self.server.focusView(prev_v, prev_v.xdg_toplevel.base.surface);
             }
         } else {

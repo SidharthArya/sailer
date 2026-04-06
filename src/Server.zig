@@ -1024,8 +1024,11 @@ pub const Server = struct {
                 if (toplevel.workspace.visible_on) |output| {
                     server.output_layout.getBox(output.wlr_output, &ws_box);
                 }
-                
-                toplevel.x = @as(i32, @intFromFloat(server.cursor.x - server.grab_x)) - ws_box.x;
+                // In ribbon layout, scene tree is offset by scroll_offset_x.
+                // We store unscrolled x in toplevel.x, so subtract scroll to get unscrolled position.
+                const ws = toplevel.workspace;
+                const scroll: i32 = if (ws.layout == .ribbon) ws.scroll_offset_x else 0;
+                toplevel.x = @as(i32, @intFromFloat(server.cursor.x - server.grab_x)) - ws_box.x - scroll;
                 toplevel.y = @as(i32, @intFromFloat(server.cursor.y - server.grab_y)) - ws_box.y;
                 toplevel.scene_tree.node.setPosition(toplevel.x, toplevel.y);
             },
@@ -1131,17 +1134,18 @@ pub const Server = struct {
 
         var is_ctrl = false;
         if (wlr.Seat.getKeyboard(server.seat)) |kb| {
-            if (wlr.Keyboard.getModifiers(kb).ctrl) is_ctrl = true;
+            const mods = wlr.Keyboard.getModifiers(kb);
+            if (mods.logo) is_ctrl = true;
         }
 
         if (event.state == .released) {
             if (server.cursor_mode == .move) {
-                if (server.focused_workspace.layout == .ribbon) {
-                    const ws = server.focused_workspace;
-                    const area = ws.getUsableArea();
-                    const drop_x = server.cursor.x - @as(f64, @floatFromInt(area.x + ws.scroll_offset_x));
+                if (server.grabbed_view) |toplevel| {
+                    const ws = toplevel.workspace;
+                    if (ws.layout == .ribbon) {
+                        const area = ws.getUsableArea();
+                        const drop_x = server.cursor.x - @as(f64, @floatFromInt(area.x + ws.scroll_offset_x));
 
-                    if (server.grabbed_view) |toplevel| {
                         toplevel.link.remove();
                         var placed = false;
                         var it = ws.views.link.prev;
@@ -1149,7 +1153,7 @@ pub const Server = struct {
                             const view: *View.Toplevel = @fieldParentPtr("link", it.?);
                             const target_width: i32 = if (area.width > 0) @divTrunc(area.width * view.width_percent, 100) else 100;
                             const center_x = view.x + @divTrunc(target_width, 2);
-                            
+
                             if (drop_x < @as(f64, @floatFromInt(center_x))) {
                                 it.?.insert(&toplevel.link);
                                 placed = true;
@@ -1157,6 +1161,7 @@ pub const Server = struct {
                             }
                         }
                         if (!placed) ws.views.link.insert(&toplevel.link);
+                        server.grabbed_view = null;
                         ws.arrange();
                     }
                 }
@@ -1169,7 +1174,11 @@ pub const Server = struct {
                 server.grabbed_view = res.toplevel;
                 if (event.button == 0x110) { // BTN_LEFT
                     server.cursor_mode = .move;
-                    server.grab_x = server.cursor.x - @as(f64, @floatFromInt(res.toplevel.x));
+                    // In ribbon layout the scene tree is offset by scroll_offset_x,
+                    // so the window's screen x = toplevel.x + scroll_offset_x
+                    const ws = res.toplevel.workspace;
+                    const scroll: i32 = if (ws.layout == .ribbon) ws.scroll_offset_x else 0;
+                    server.grab_x = server.cursor.x - @as(f64, @floatFromInt(res.toplevel.x + scroll));
                     server.grab_y = server.cursor.y - @as(f64, @floatFromInt(res.toplevel.y));
                     return; // Intercept
                 } else if (event.button == 0x111) { // BTN_RIGHT
