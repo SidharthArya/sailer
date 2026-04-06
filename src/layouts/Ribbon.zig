@@ -7,7 +7,7 @@ pub const Ribbon = struct {
     pub fn arrange(self: *Ribbon, ws: *Workspace, box: wlr.Box) void {
         var current_x: i32 = 0;
 
-        // Ribbon order (Left-to-Right): Tail (prev) -> Head (next)
+        // Layout windows left-to-right (tail→head order)
         var it = ws.views.link.prev;
         while (it != &ws.views.link) : (it = it.?.prev) {
             const view: *View.Toplevel = @fieldParentPtr("link", it.?);
@@ -17,8 +17,9 @@ pub const Ribbon = struct {
             }
             view.scene_tree.node.setEnabled(true);
 
+            // Floating windows stay at their own x/y (unaffected by ribbon layout)
             if (view.is_floating) {
-                view.scene_tree.node.setPosition(view.x - ws.scroll_offset_x, view.y);
+                view.scene_tree.node.setPosition(view.x, view.y);
                 continue;
             }
 
@@ -29,10 +30,10 @@ pub const Ribbon = struct {
             var width: i32 = target_width - gap * 2;
             var height: i32 = @max(1, target_height - gap * 2);
 
-            const min_w = if (view.xdg_toplevel.current.min_width < 10000) view.xdg_toplevel.current.min_width else 0;
-            const min_h = if (view.xdg_toplevel.current.min_height < 10000) view.xdg_toplevel.current.min_height else 0;
-            const max_w = if (view.xdg_toplevel.current.max_width < 10000) view.xdg_toplevel.current.max_width else 0;
-            const max_h = if (view.xdg_toplevel.current.max_height < 10000) view.xdg_toplevel.current.max_height else 0;
+            const min_w = if (view.xdg_toplevel.current.min_width > 0 and view.xdg_toplevel.current.min_width < 10000) view.xdg_toplevel.current.min_width else 0;
+            const min_h = if (view.xdg_toplevel.current.min_height > 0 and view.xdg_toplevel.current.min_height < 10000) view.xdg_toplevel.current.min_height else 0;
+            const max_w = if (view.xdg_toplevel.current.max_width > 0 and view.xdg_toplevel.current.max_width < 10000) view.xdg_toplevel.current.max_width else 0;
+            const max_h = if (view.xdg_toplevel.current.max_height > 0 and view.xdg_toplevel.current.max_height < 10000) view.xdg_toplevel.current.max_height else 0;
 
             if (min_w > 0) width = @max(width, min_w);
             if (max_w > 0) width = @min(width, @as(i32, @intCast(max_w)));
@@ -44,89 +45,70 @@ pub const Ribbon = struct {
             const xdg_h = @max(1, height - 2 * bw);
 
             if (xdg_w > 10000 or xdg_h > 10000) {
-                // TODO: The 10000px sanity limit is duplicated across Ribbon, Tiling, and SmartView — extract to a shared constant.
-                std.log.err("Refusing to resize view to extreme dimensions: {d}x{d}", .{xdg_w, xdg_h});
+                std.log.err("Ribbon: refusing extreme dimensions {d}x{d}", .{ xdg_w, xdg_h });
                 continue;
             }
 
-            // Smart Resize: Only send configure if target dimensions actually changed.
             if (view.xdg_toplevel.current.width != xdg_w or view.xdg_toplevel.current.height != xdg_h) {
                 _ = wlr.XdgToplevel.setSize(view.xdg_toplevel, xdg_w, xdg_h);
             }
 
             view.updateLayout(width, height);
 
-            // Center within its logical slot if it's smaller than its allocated width
             const offset_x = @divTrunc(target_width - width, 2);
             const offset_y = @divTrunc(target_height - height, 2);
 
-            view.scene_tree.node.setPosition(current_x + offset_x, offset_y);
-            std.log.debug("Ribbon arrange: {s} -> {d},{d} (size {d}x{d})", .{ @as([*:0]const u8, @ptrCast(view.xdg_toplevel.title orelse "unnamed")), current_x + offset_x, offset_y, width, height });
-
+            // Store unscrolled position — scroll is applied via scene_tree position below
             view.x = current_x + offset_x;
             view.y = offset_y;
+
+            // Position relative to scene tree (scroll applied at scene tree level)
+            view.scene_tree.node.setPosition(view.x, view.y);
 
             current_x += target_width;
         }
 
         self.clampScroll(ws, box);
-    }
-    fn clampScroll(_: *Ribbon, ws: *Workspace, box: wlr.Box) void {
-        // Never allow positive scroll (pushed to right)
-        if (ws.scroll_offset_x > 0) {
-            ws.scroll_offset_x = 0;
-        }
 
-        // Calculate total width of all windows to prevent over-scrolling into empty space
+        // Apply scroll: shift the entire workspace scene tree left/right
+        ws.scene_tree.node.setPosition(box.x + ws.scroll_offset_x, box.y);
+    }
+
+    fn clampScroll(_: *Ribbon, ws: *Workspace, box: wlr.Box) void {
         var total_width: i32 = 0;
         var it = ws.views.link.prev;
         while (it != &ws.views.link) : (it = it.?.prev) {
             const view: *View.Toplevel = @fieldParentPtr("link", it.?);
-            if (!view.mapped) continue;
-            const width: i32 = @divTrunc(box.width * view.width_percent, 100);
-            total_width += width;
+            if (!view.mapped or view.hidden or view.is_floating) continue;
+            total_width += @divTrunc(box.width * view.width_percent, 100);
         }
 
-        const max_scroll = @max(0, box.width - total_width);
-        const min_scroll = if (total_width > box.width) box.width - total_width else 0;
+        // scroll_offset_x is negative to scroll right (reveal windows to the right)
+        // min_scroll: most negative — last window right-aligned
+        // max_scroll: 0 — first window left-aligned
+        const min_scroll: i32 = if (total_width > box.width) box.width - total_width else 0;
+        const max_scroll: i32 = 0;
 
-        if (ws.scroll_offset_x < min_scroll) {
-            ws.scroll_offset_x = min_scroll;
-        } else if (ws.scroll_offset_x > max_scroll) {
-            ws.scroll_offset_x = max_scroll;
-        }
+        if (ws.scroll_offset_x < min_scroll) ws.scroll_offset_x = min_scroll;
+        if (ws.scroll_offset_x > max_scroll) ws.scroll_offset_x = max_scroll;
     }
 
     pub fn ensureViewVisible(self: *Ribbon, ws: *Workspace, view: *View.Toplevel) void {
-        var box: wlr.Box = undefined;
-        if (ws.server.display_mode == .spanned) {
-            ws.server.output_layout.getBox(null, &box);
-        } else if (ws.visible_on) |output| {
-            ws.server.output_layout.getBox(output.wlr_output, &box);
-        } else {
-            std.log.err("ensureViewVisible: no output, skipping", .{});
-            return;
-        }
+        if (view.is_floating) return;
 
-        if (box.width <= 0) {
-            std.log.err("ensureViewVisible: box.width={} <= 0, skipping", .{box.width});
-            return;
-        }
+        // Use getUsableArea to match the same box used in arrange()
+        const box = ws.getUsableArea();
+        if (box.width <= 0) return;
 
         const view_width: i32 = @divTrunc(box.width * view.width_percent, 100);
 
-        // Center the focused view on screen
-        const new_scroll = @divTrunc(box.width - view_width, 2) - view.x;
+        // Center the focused window in the viewport (niri/paperwm style)
+        const target_scroll = @divTrunc(box.width - view_width, 2) - view.x;
 
-        std.log.err("ensureViewVisible: view.x={} view_width={} box.width={} cur_scroll={} new_scroll={}", .{
-            view.x, view_width, box.width, ws.scroll_offset_x, new_scroll,
-        });
-
-        if (new_scroll != ws.scroll_offset_x) {
-            ws.scroll_offset_x = new_scroll;
+        if (target_scroll != ws.scroll_offset_x) {
+            ws.scroll_offset_x = target_scroll;
             self.clampScroll(ws, box);
-            std.log.err("ensureViewVisible: applied scroll={}", .{ws.scroll_offset_x});
-            ws.arrange();
+            ws.scene_tree.node.setPosition(box.x + ws.scroll_offset_x, box.y);
         }
     }
 };
