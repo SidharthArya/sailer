@@ -1,0 +1,65 @@
+name: Create Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build & Package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v1
+        with:
+          version: 0.15.0-dev.28+2884a4463 # Adjust to a stable 0.15.x when available
+
+      - name: Build Sailer
+        run: zig build -Doptimize=ReleaseSafe
+
+      - name: Install nFPM
+        run: |
+          echo 'deb [trusted=yes] https://repo.goreleaser.com/apt/ /' | sudo tee /etc/apt/sources.list.d/goreleaser.list
+          sudo apt-get update
+          sudo apt-get install -y nfpm
+
+      - name: Create .deb and .rpm
+        run: |
+          export VERSION=${GITHUB_REF_NAME#v}
+          nfpm pkg --config nfpm.yaml --packager deb --target sailer_${VERSION}_amd64.deb
+          nfpm pkg --config nfpm.yaml --packager rpm --target sailer-${VERSION}-1.x86_64.rpm
+
+      - name: Build Arch Package (.zst)
+        uses: 256dpi/action-arch-makepkg@v1
+        with:
+          working-directory: installer
+          # The PKGBUILD in installer/ needs to be adjusted to point to local files or the tag
+          # For CI, we can modify it on the fly to use the current directory
+
+      - name: Generate Changelog
+        id: changelog
+        run: |
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 ${GITHUB_REF_NAME}^ 2>/dev/null || echo "")
+          if [ -z "$PREVIOUS_TAG" ]; then
+            git log --pretty=format:"* %s (%h)" > CHANGELOG.md
+          else
+            git log --pretty=format:"* %s (%h)" ${PREVIOUS_TAG}..${GITHUB_REF_NAME} > CHANGELOG.md
+          fi
+          echo "REPORT=$(cat CHANGELOG.md)" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: CHANGELOG.md
+          files: |
+            sailer_*.deb
+            sailer-*.rpm
+            installer/*.pkg.tar.zst
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
