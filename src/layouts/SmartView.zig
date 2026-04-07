@@ -31,7 +31,7 @@ pub const SmartView = struct {
             }
             view.scene_tree.node.setEnabled(true);
 
-            if (view.is_floating) continue;
+            if (view.is_floating or view.is_fullscreen or view.is_maximized) continue;
 
             const r = @divTrunc(i, cols);
             const c = @mod(i, cols);

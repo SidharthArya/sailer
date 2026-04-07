@@ -77,8 +77,7 @@ pub const Workspace = struct {
                 toplevel.updateLayout(full_box.width, full_box.height);
                 _ = toplevel.xdg_toplevel.setSize(full_box.width, full_box.height);
                 toplevel.scene_tree.node.raiseToTop();
-                self.server.refreshBars();
-                return;
+                break;
             }
 
             if (toplevel.is_maximized) {
@@ -88,8 +87,7 @@ pub const Workspace = struct {
                 toplevel.updateLayout(layout_box.width, layout_box.height);
                 _ = toplevel.xdg_toplevel.setSize(layout_box.width, layout_box.height);
                 toplevel.scene_tree.node.raiseToTop();
-                self.server.refreshBars();
-                return;
+                break;
             }
         }
 

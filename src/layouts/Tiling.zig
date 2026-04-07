@@ -19,11 +19,12 @@ pub const Tiling = struct {
         var it = ws.views.link.prev;
         while (it != &ws.views.link) : (it = it.?.prev) {
             const view: *View.Toplevel = @fieldParentPtr("link", it.?);
-            if (!view.mapped or view.hidden or view.is_floating) {
+            if (!view.mapped or view.hidden) {
                 if (view.hidden) view.scene_tree.node.setEnabled(false);
                 continue;
             }
             view.scene_tree.node.setEnabled(true);
+            if (view.is_floating or view.is_fullscreen or view.is_maximized) continue;
             if (count < views.len) {
                 views[count] = view;
                 count += 1;

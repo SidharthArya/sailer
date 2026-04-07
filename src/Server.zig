@@ -42,6 +42,11 @@ fn handleBarTimer(server: *Server) c_int {
     return 0;
 }
 
+pub const PendingScratchpad = struct {
+    search_id: []const u8,
+    kb_ptr: usize,
+};
+
 pub const Server = struct {
     wl_server: *wl.Server,
     backend: *wlr.Backend,
@@ -94,6 +99,7 @@ pub const Server = struct {
     last_mod_tap_ready: bool = false,
     last_mod_sym: ?xkb.Keysym = null,
     last_mod_timestamp: u32 = 0,
+    pending_scratchpads: std.ArrayListUnmanaged(PendingScratchpad) = .{},
 
     cursor_mode: enum { passthrough, move, resize } = .passthrough,
     grabbed_view: ?*Toplevel = null,
@@ -158,6 +164,7 @@ pub const Server = struct {
         server.display_mode = .discrete;
         server.socket_name = "";
         server.last_mod_tap_ready = false;
+        server.pending_scratchpads = .{};
         server.last_mod_sym = null;
         server.last_mod_timestamp = 0;
         server.grab_x = 0;
@@ -618,6 +625,15 @@ pub const Server = struct {
         };
         
         server.config = new_config;
+
+        // Clear scratchpad associations as keybinding pointers are now invalid
+        for (server.workspaces) |ws| {
+            var it = ws.views.link.next;
+            while (it != &ws.views.link) : (it = it.?.next) {
+                const t: *Toplevel = @fieldParentPtr("link", it.?);
+                t.scratchpad_id = 0;
+            }
+        }
         server.bar_height = if (server.config.bar.enabled and server.config.bar.exclusive) server.config.bar.height else 0;
         
         // Apply potentially changed settings like gaps
@@ -627,6 +643,7 @@ pub const Server = struct {
     }
 
     pub fn deinit(server: *Server) void {
+        server.pending_scratchpads.deinit(std.heap.c_allocator);
         server.wl_server.destroyClients();
 
         server.listeners.new_input.link.remove();
@@ -717,6 +734,7 @@ pub const Server = struct {
             return;
         };
         
+
         // Add to workspace list immediately so link is valid for remove() later
         ws.views.prepend(toplevel);
         ws.focus_history.prepend(toplevel);
@@ -807,7 +825,7 @@ pub const Server = struct {
 
     pub fn focusView(server: *Server, toplevel: *Toplevel, surface: *wlr.Surface) void {
         if (server.seat.keyboard_state.focused_surface) |previous_surface| {
-            if (previous_surface == surface) return;
+            if (previous_surface == surface and !toplevel.hidden) return;
             if (wlr.XdgSurface.tryFromWlrSurface(previous_surface)) |xdg_surface| {
                 if (xdg_surface.role_data.toplevel) |prev_t_wlr| {
                     _ = wlr.XdgToplevel.setActivated(prev_t_wlr, false);
@@ -1491,6 +1509,64 @@ pub const Server = struct {
                     else => unreachable,
                 }
                 t.workspace.arrange();
+            },
+            .toggle_scratchpad => {
+                const search_id = kb.app_id orelse kb.command orelse return;
+                const kb_ptr = @intFromPtr(&kb);
+                var found: ?*Toplevel = null;
+
+                // 1. Search for a window already claimed by this specific keybinding
+                for (server.workspaces) |ws| {
+                    var it = ws.views.link.next;
+                    while (it != &ws.views.link) : (it = it.?.next) {
+                        const t: *Toplevel = @fieldParentPtr("link", it.?);
+                        if (t.scratchpad_id == kb_ptr) {
+                            found = t;
+                            break;
+                        }
+                    }
+                    if (found != null) break;
+                }
+
+                if (found) |t| {
+                    const current_ws = server.focused_workspace;
+                    std.log.debug("toggle_scratchpad: found existing window for kb_ptr 0x{x} on workspace '{s}'", .{ 
+                        kb_ptr, t.workspace.name 
+                    });
+
+                    if (t.workspace != current_ws) {
+                        std.log.debug("toggle_scratchpad: moving to current workspace '{s}'", .{ current_ws.name });
+                        t.link.remove();
+                        current_ws.views.prepend(t);
+                        t.workspace = current_ws;
+                        t.scene_tree.node.reparent(current_ws.scene_tree);
+                    }
+
+                    t.hidden = !t.hidden;
+                    std.log.debug("toggle_scratchpad: toggled hidden to: {}", .{ t.hidden });
+
+                    if (!t.hidden) {
+                        t.is_floating = true;
+                        server.focusView(t, t.xdg_toplevel.base.surface);
+                    } else {
+                        // If we just hid the focused window, clear focus
+                        if (server.seat.keyboard_state.focused_surface == t.xdg_toplevel.base.surface) {
+                            std.log.debug("toggle_scratchpad: clearing focus from hidden scratchpad", .{});
+                            wlr.Seat.keyboardNotifyClearFocus(server.seat);
+                        }
+                    }
+                    current_ws.arrange();
+                } else if (kb.command) |cmd| {
+                    std.log.info("toggle_scratchpad: not found, spawning: {s}", .{ cmd });
+                    // Register pending scratchpad before spawning
+                    server.pending_scratchpads.append(std.heap.c_allocator, .{ 
+                        .search_id = search_id, 
+                        .kb_ptr = kb_ptr 
+                    }) catch |err| {
+                        std.log.err("Failed to register pending scratchpad: {}", .{err});
+                    };
+                    server.spawn(cmd);
+                }
             },
             .reload_config => server.reloadConfig(),
         }

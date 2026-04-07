@@ -30,6 +30,7 @@ pub const Toplevel = struct {
     marked: bool = false,
     hidden: bool = false,
     urgent: bool = false,
+    scratchpad_id: usize = 0, // Associating with a keybinding pointer
     border_width: i32 = 2,
     active_border_color: [4]f32 = .{ 0.38, 0.44, 0.60, 1.0 },
     inactive_border_color: [4]f32 = .{ 0.15, 0.17, 0.23, 1.0 },
@@ -165,6 +166,22 @@ pub const Toplevel = struct {
         const toplevel: *Toplevel = @fieldParentPtr("listeners", listeners);
 
         std.log.debug("View map: {s}", .{@as([*:0]const u8, @ptrCast(toplevel.xdg_toplevel.title orelse "unnamed"))});
+
+        // Claim as scratchpad if it matches a pending request
+        if (toplevel.xdg_toplevel.app_id) |id| {
+            const app_id = std.mem.span(id);
+            var i: usize = 0;
+            while (i < toplevel.server.pending_scratchpads.items.len) {
+                const pending = toplevel.server.pending_scratchpads.items[i];
+                if (std.mem.eql(u8, pending.search_id, app_id)) {
+                    std.log.debug("View map: claiming '{s}' as scratchpad for kb_ptr 0x{x}", .{ app_id, pending.kb_ptr });
+                    toplevel.scratchpad_id = pending.kb_ptr;
+                    _ = toplevel.server.pending_scratchpads.orderedRemove(i);
+                    break;
+                }
+                i += 1;
+            }
+        }
         toplevel.mapped = true;
         toplevel.updateBorderColor(&toplevel.inactive_border_color);
         if (toplevel.border_top) |r| r.node.raiseToTop();
