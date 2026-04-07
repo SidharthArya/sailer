@@ -48,9 +48,10 @@ jobs:
           sed -i 's|cd "$pkgname-$pkgver"|cd "$srcdir/sailer"|' installer/PKGBUILD
         
       - name: Run makepkg
-        uses: 256dpi/action-arch-makepkg@v1
+        uses: heyhusen/archlinux-package-action@v3
         with:
-          working-directory: installer
+          pkgdir: installer
+          flags: '-cfs --noconfirm'
 
       - name: Generate Changelog
         id: changelog
