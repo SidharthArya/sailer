@@ -2,6 +2,8 @@
 
 A Wayland compositor written in Zig, built on wlroots. Sailing across in Linux.
 
+[![AUR version](https://img.shields.io/aur/version/sailer.svg)](https://aur.archlinux.org/packages/sailer)
+
 ## Features
 
 - Multiple layout modes: Ribbon (horizontal scrolling), Tiling, Floating, SmartView
