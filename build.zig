@@ -155,6 +155,7 @@ pub fn build(b: *std.Build) void {
     exe.linkSystemLibrary("xkbcommon");
     exe.linkSystemLibrary("pixman-1");
     exe.linkSystemLibrary("freetype2");
+    exe.linkSystemLibrary("dbus-1");
 
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default

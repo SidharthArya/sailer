@@ -176,6 +176,7 @@ pub const Toplevel = struct {
                 if (std.mem.eql(u8, pending.search_id, app_id)) {
                     std.log.debug("View map: claiming '{s}' as scratchpad for kb_ptr 0x{x}", .{ app_id, pending.kb_ptr });
                     toplevel.scratchpad_id = pending.kb_ptr;
+                    toplevel.is_floating = true;
                     _ = toplevel.server.pending_scratchpads.orderedRemove(i);
                     break;
                 }

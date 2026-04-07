@@ -1052,7 +1052,7 @@ pub const Server = struct {
             },
             .resize => {
                 const toplevel = server.grabbed_view.?;
-                if (server.focused_workspace.layout != .floating) {
+                if (!toplevel.is_floating) {
                     const box = server.focused_workspace.getUsableArea();
                     if (box.width > 0) {
                         const delta_x = if (server.resize_edges.right)
@@ -1537,7 +1537,7 @@ pub const Server = struct {
                     if (t.workspace != current_ws) {
                         std.log.debug("toggle_scratchpad: moving to current workspace '{s}'", .{ current_ws.name });
                         t.link.remove();
-                        current_ws.views.prepend(t);
+                        current_ws.views.append(t);
                         t.workspace = current_ws;
                         t.scene_tree.node.reparent(current_ws.scene_tree);
                     }
@@ -1546,7 +1546,6 @@ pub const Server = struct {
                     std.log.debug("toggle_scratchpad: toggled hidden to: {}", .{ t.hidden });
 
                     if (!t.hidden) {
-                        t.is_floating = true;
                         server.focusView(t, t.xdg_toplevel.base.surface);
                     } else {
                         // If we just hid the focused window, clear focus

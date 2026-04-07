@@ -178,16 +178,28 @@ pub const Workspace = struct {
         if (focused) |f| {
             if (delta > 0) {
                 // focus_right: ribbon iterates link.prev left-to-right, so right = link.prev
-                const target = f.link.prev.?;
-                if (target == &self.views.link) { self.ensureViewVisible(f); return; }
-                const next_v: *View.Toplevel = @fieldParentPtr("link", target);
-                self.server.focusView(next_v, next_v.xdg_toplevel.base.surface);
+                var target = f.link.prev.?;
+                while (target != &self.views.link) {
+                    const next_v: *View.Toplevel = @fieldParentPtr("link", target);
+                    if (next_v.mapped and !next_v.hidden and next_v.is_floating == f.is_floating) {
+                        self.server.focusView(next_v, next_v.xdg_toplevel.base.surface);
+                        return;
+                    }
+                    target = target.prev.?;
+                }
+                self.ensureViewVisible(f);
             } else {
                 // focus_left: left = link.next
-                const target = f.link.next.?;
-                if (target == &self.views.link) { self.ensureViewVisible(f); return; }
-                const prev_v: *View.Toplevel = @fieldParentPtr("link", target);
-                self.server.focusView(prev_v, prev_v.xdg_toplevel.base.surface);
+                var target = f.link.next.?;
+                while (target != &self.views.link) {
+                    const prev_v: *View.Toplevel = @fieldParentPtr("link", target);
+                    if (prev_v.mapped and !prev_v.hidden and prev_v.is_floating == f.is_floating) {
+                        self.server.focusView(prev_v, prev_v.xdg_toplevel.base.surface);
+                        return;
+                    }
+                    target = target.next.?;
+                }
+                self.ensureViewVisible(f);
             }
         } else {
             const head = self.views.link.next.?;
