@@ -20,6 +20,18 @@ jobs:
         with:
           version: 0.15.2
 
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwayland-dev \
+            wayland-protocols \
+            libxkbcommon-dev \
+            libpixman-1-dev \
+            libfreetype6-dev \
+            libdbus-1-dev \
+            pkg-config
+
       - name: Build Sailer
         run: zig build -Doptimize=ReleaseSafe
 
