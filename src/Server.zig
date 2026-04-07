@@ -831,6 +831,9 @@ pub const Server = struct {
                     _ = wlr.XdgToplevel.setActivated(prev_t_wlr, false);
                     if (View.fromXdgSurface(xdg_surface)) |prev_t| {
                         prev_t.updateBorderColor(&prev_t.inactive_border_color);
+                        if (prev_t.foreign_toplevel) |handle| {
+                            handle.setActivated(false);
+                        }
                     }
                 }
             }
@@ -844,6 +847,9 @@ pub const Server = struct {
         toplevel.workspace.focus_history.prepend(toplevel);
 
         _ = wlr.XdgToplevel.setActivated(toplevel.xdg_toplevel, true);
+        if (toplevel.foreign_toplevel) |handle| {
+            handle.setActivated(true);
+        }
 
         if (server.seat.keyboard_state.keyboard) |kbd| {
             wlr.Seat.keyboardNotifyEnter(server.seat, surface, kbd.keycodes[0..kbd.num_keycodes], &kbd.modifiers);

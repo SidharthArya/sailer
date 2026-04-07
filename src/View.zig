@@ -50,6 +50,12 @@ pub const Toplevel = struct {
         request_maximize: wl.Listener(void),
         request_fullscreen: wl.Listener(void),
         request_show_window_menu: wl.Listener(*wlr.XdgToplevel.event.ShowWindowMenu),
+        foreign_request_maximize: wl.Listener(*wlr.ForeignToplevelHandleV1.event.Maximized),
+        foreign_request_minimize: wl.Listener(*wlr.ForeignToplevelHandleV1.event.Minimized),
+        foreign_request_activate: wl.Listener(*wlr.ForeignToplevelHandleV1.event.Activated),
+        foreign_request_fullscreen: wl.Listener(*wlr.ForeignToplevelHandleV1.event.Fullscreen),
+        foreign_request_close: wl.Listener(*wlr.ForeignToplevelHandleV1),
+        foreign_destroy: wl.Listener(*wlr.ForeignToplevelHandleV1),
     };
 
     pub fn create(server: *Server, workspace: *@import("Workspace.zig").Workspace, xdg_toplevel: *wlr.XdgToplevel) !*Toplevel {
@@ -82,6 +88,12 @@ pub const Toplevel = struct {
         toplevel.listeners.request_maximize = .init(handleRequestMaximize);
         toplevel.listeners.request_fullscreen = .init(handleRequestFullscreen);
         toplevel.listeners.request_show_window_menu = .init(handleRequestShowWindowMenu);
+        toplevel.listeners.foreign_request_maximize = .init(handleForeignRequestMaximize);
+        toplevel.listeners.foreign_request_minimize = .init(handleForeignRequestMinimize);
+        toplevel.listeners.foreign_request_activate = .init(handleForeignRequestActivate);
+        toplevel.listeners.foreign_request_fullscreen = .init(handleForeignRequestFullscreen);
+        toplevel.listeners.foreign_request_close = .init(handleForeignRequestClose);
+        toplevel.listeners.foreign_destroy = .init(handleForeignDestroy);
 
         xdg_toplevel.base.surface.events.commit.add(&toplevel.listeners.commit);
         xdg_toplevel.base.surface.events.map.add(&toplevel.listeners.map);
@@ -190,6 +202,28 @@ pub const Toplevel = struct {
         if (toplevel.border_left) |r| r.node.raiseToTop();
         if (toplevel.border_right) |r| r.node.raiseToTop();
 
+        // Create foreign toplevel handle
+        if (toplevel.foreign_toplevel == null) {
+            if (wlr.ForeignToplevelHandleV1.create(toplevel.server.foreign_toplevel_mgr) catch null) |handle| {
+                toplevel.foreign_toplevel = handle;
+                handle.events.request_activate.add(&toplevel.listeners.foreign_request_activate);
+                handle.events.request_maximize.add(&toplevel.listeners.foreign_request_maximize);
+                handle.events.request_minimize.add(&toplevel.listeners.foreign_request_minimize);
+                handle.events.request_fullscreen.add(&toplevel.listeners.foreign_request_fullscreen);
+                handle.events.request_close.add(&toplevel.listeners.foreign_request_close);
+                handle.events.destroy.add(&toplevel.listeners.foreign_destroy);
+
+                if (toplevel.xdg_toplevel.title) |title| handle.setTitle(title);
+                if (toplevel.xdg_toplevel.app_id) |app_id| handle.setAppId(app_id);
+                handle.setMaximized(toplevel.is_maximized);
+                handle.setFullscreen(toplevel.is_fullscreen);
+                if (toplevel.workspace.visible_on) |output| {
+                    handle.outputEnter(output.wlr_output);
+                    toplevel.last_output = output.wlr_output;
+                }
+            }
+        }
+
         toplevel.workspace.arrange();
         toplevel.server.focusView(toplevel, toplevel.xdg_toplevel.base.surface);
     }
@@ -251,6 +285,11 @@ pub const Toplevel = struct {
                     }
                 }
             }
+        }
+
+        if (toplevel.foreign_toplevel) |handle| {
+            handle.destroy();
+            toplevel.foreign_toplevel = null;
         }
     }
 
@@ -402,6 +441,49 @@ pub const Toplevel = struct {
         const gy = toplevel.y + event.y;
 
         server.openMenu(toplevel, gx, gy);
+    }
+
+    fn handleForeignRequestMaximize(listener: *wl.Listener(*wlr.ForeignToplevelHandleV1.event.Maximized), event: *wlr.ForeignToplevelHandleV1.event.Maximized) void {
+        const listeners: *Listeners = @fieldParentPtr("foreign_request_maximize", listener);
+        const toplevel: *Toplevel = @fieldParentPtr("listeners", listeners);
+        toplevel.setMaximized(event.maximized);
+    }
+
+    fn handleForeignRequestMinimize(listener: *wl.Listener(*wlr.ForeignToplevelHandleV1.event.Minimized), event: *wlr.ForeignToplevelHandleV1.event.Minimized) void {
+        const listeners: *Listeners = @fieldParentPtr("foreign_request_minimize", listener);
+        const toplevel: *Toplevel = @fieldParentPtr("listeners", listeners);
+        if (event.minimized) {
+            toplevel.hidden = true;
+            toplevel.workspace.arrange();
+        } else {
+            toplevel.hidden = false;
+            toplevel.workspace.arrange();
+        }
+    }
+
+    fn handleForeignRequestActivate(listener: *wl.Listener(*wlr.ForeignToplevelHandleV1.event.Activated), event: *wlr.ForeignToplevelHandleV1.event.Activated) void {
+        _ = event;
+        const listeners: *Listeners = @fieldParentPtr("foreign_request_activate", listener);
+        const toplevel: *Toplevel = @fieldParentPtr("listeners", listeners);
+        toplevel.server.focusView(toplevel, toplevel.xdg_toplevel.base.surface);
+    }
+
+    fn handleForeignRequestFullscreen(listener: *wl.Listener(*wlr.ForeignToplevelHandleV1.event.Fullscreen), event: *wlr.ForeignToplevelHandleV1.event.Fullscreen) void {
+        const listeners: *Listeners = @fieldParentPtr("foreign_request_fullscreen", listener);
+        const toplevel: *Toplevel = @fieldParentPtr("listeners", listeners);
+        toplevel.setFullscreen(event.fullscreen);
+    }
+
+    fn handleForeignRequestClose(listener: *wl.Listener(*wlr.ForeignToplevelHandleV1), _: *wlr.ForeignToplevelHandleV1) void {
+        const listeners: *Listeners = @fieldParentPtr("foreign_request_close", listener);
+        const toplevel: *Toplevel = @fieldParentPtr("listeners", listeners);
+        toplevel.close();
+    }
+
+    fn handleForeignDestroy(listener: *wl.Listener(*wlr.ForeignToplevelHandleV1), _: *wlr.ForeignToplevelHandleV1) void {
+        const listeners: *Listeners = @fieldParentPtr("foreign_destroy", listener);
+        const toplevel: *Toplevel = @fieldParentPtr("listeners", listeners);
+        toplevel.foreign_toplevel = null;
     }
 };
 

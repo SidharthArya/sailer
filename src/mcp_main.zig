@@ -24,15 +24,9 @@ pub fn main() !void {
 
         while (std.mem.indexOfScalar(u8, stdin_buf[0..stdin_pos], '\n')) |nl| {
             const line = stdin_buf[0..nl];
-            var out = std.ArrayListUnmanaged(u8){};
-            defer out.deinit(gpa);
-
-            processMessage(socket_path, line, &out) catch |err| {
-                std.log.err("mcp: error processing message: {}", .{err});
-                out.clearRetainingCapacity();
-                out.appendSlice(gpa, "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32603,\"message\":\"internal error\"}}\n") catch {};
+            processLine(socket_path, line, stdout_fd) catch |err| {
+                std.log.err("mcp: error processing line: {}", .{err});
             };
-            if (out.items.len > 0) _ = std.posix.write(stdout_fd, out.items) catch {};
 
             const remaining = stdin_pos - nl - 1;
             std.mem.copyForwards(u8, stdin_buf[0..remaining], stdin_buf[nl + 1 .. stdin_pos]);
@@ -40,6 +34,25 @@ pub fn main() !void {
         }
         if (stdin_pos >= stdin_buf.len) break;
     }
+
+    // Process remaining data if any (EOF reached without a final newline)
+    if (stdin_pos > 0) {
+        processLine(socket_path, stdin_buf[0..stdin_pos], stdout_fd) catch |err| {
+            std.log.err("mcp: error processing final line: {}", .{err});
+        };
+    }
+}
+
+fn processLine(socket_path: []const u8, line: []const u8, stdout_fd: std.posix.fd_t) !void {
+    var out = std.ArrayListUnmanaged(u8){};
+    defer out.deinit(gpa);
+
+    processMessage(socket_path, line, &out) catch |err| {
+        std.log.err("mcp: error processing message: {}", .{err});
+        out.clearRetainingCapacity();
+        out.appendSlice(gpa, "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32603,\"message\":\"internal error\"}}\n") catch {};
+    };
+    if (out.items.len > 0) _ = std.posix.write(stdout_fd, out.items) catch {};
 }
 
 fn resolveSocketPath() ![]u8 {
@@ -88,9 +101,10 @@ fn processMessage(socket_path: []const u8, line: []const u8, out: *std.ArrayList
     if (std.mem.eql(u8, method, "initialize")) {
         try sendResponse(writer, id, .{
             .protocolVersion = "2024-11-05",
-            .capabilities = .{ .tools = .{} },
+            .capabilities = .{ .tools = .{ .listChanged = false } },
             .serverInfo = .{ .name = "sailer-mcp", .version = "0.1.0" },
         });
+        std.log.info("mcp: initialized successfully", .{});
         return;
     }
 
