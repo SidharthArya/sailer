@@ -1353,6 +1353,15 @@ pub const Server = struct {
         server.refreshBars();
     }
 
+    pub fn activateWorkspace(server: *Server, target_ws: *@import("Workspace.zig").Workspace) void {
+        for (server.workspaces, 0..) |ws, i| {
+            if (ws == target_ws) {
+                server.switchToWorkspace(@intCast(i));
+                return;
+            }
+        }
+    }
+
     fn executeAction(server: *Server, action: Action, kb: Keybinding, target: ?*Toplevel) void {
         const toplevel = target orelse if (server.seat.keyboard_state.focused_surface) |surface| blk: {
             if (wlr.XdgSurface.tryFromWlrSurface(surface)) |xdg_surface| {

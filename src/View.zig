@@ -476,6 +476,7 @@ pub const Toplevel = struct {
         _ = event;
         const listeners: *Listeners = @fieldParentPtr("foreign_request_activate", listener);
         const toplevel: *Toplevel = @fieldParentPtr("listeners", listeners);
+        toplevel.server.activateWorkspace(toplevel.workspace);
         toplevel.server.focusView(toplevel, toplevel.xdg_toplevel.base.surface);
     }
 
