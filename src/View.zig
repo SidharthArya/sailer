@@ -287,9 +287,8 @@ pub const Toplevel = struct {
             }
         }
 
-        if (toplevel.foreign_toplevel) |handle| {
-            handle.destroy();
-            toplevel.foreign_toplevel = null;
+        if (toplevel.foreign_toplevel) |_| {
+            toplevel.detachForeignToplevel();
         }
     }
 
@@ -311,7 +310,7 @@ pub const Toplevel = struct {
         toplevel.listeners.request_fullscreen.link.remove();
         toplevel.listeners.request_show_window_menu.link.remove();
 
-        if (toplevel.foreign_toplevel) |handle| handle.destroy();
+        if (toplevel.foreign_toplevel) |_| toplevel.detachForeignToplevel();
         toplevel.scene_tree.node.destroy();
         std.heap.c_allocator.destroy(toplevel);
     }
@@ -441,6 +440,18 @@ pub const Toplevel = struct {
         const gy = toplevel.y + event.y;
 
         server.openMenu(toplevel, gx, gy);
+    }
+
+    pub fn detachForeignToplevel(self: *Toplevel) void {
+        const handle = self.foreign_toplevel orelse return;
+        self.listeners.foreign_request_activate.link.remove();
+        self.listeners.foreign_request_maximize.link.remove();
+        self.listeners.foreign_request_minimize.link.remove();
+        self.listeners.foreign_request_fullscreen.link.remove();
+        self.listeners.foreign_request_close.link.remove();
+        self.listeners.foreign_destroy.link.remove();
+        handle.destroy();
+        self.foreign_toplevel = null;
     }
 
     fn handleForeignRequestMaximize(listener: *wl.Listener(*wlr.ForeignToplevelHandleV1.event.Maximized), event: *wlr.ForeignToplevelHandleV1.event.Maximized) void {
