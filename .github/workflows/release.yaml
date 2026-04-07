@@ -18,7 +18,7 @@ jobs:
       - name: Setup Zig
         uses: mlugg/setup-zig@v1
         with:
-          version: 0.15.0-dev.28+2884a4463 # Adjust to a stable 0.15.x when available
+          version: 0.15.0
 
       - name: Build Sailer
         run: zig build -Doptimize=ReleaseSafe
