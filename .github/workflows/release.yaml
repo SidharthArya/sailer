@@ -6,8 +6,8 @@ on:
       - 'v*'
 
 jobs:
-  build:
-    name: Build & Package
+  release:
+    name: Build & Release
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -52,36 +52,6 @@ jobs:
       - name: Build Sailer
         run: zig build -Doptimize=ReleaseSafe
 
-      - name: Install nFPM
-        run: |
-          echo 'deb [trusted=yes] https://repo.goreleaser.com/apt/ /' | sudo tee /etc/apt/sources.list.d/goreleaser.list
-          sudo apt-get update
-          sudo apt-get install -y nfpm
-
-      - name: Create .deb and .rpm
-        run: |
-          export VERSION=${GITHUB_REF_NAME#v}
-          # Update Fedora spec version
-          sed -i "s/^Version: .*/Version: ${VERSION}/" installer/sailer.spec
-          
-          nfpm pkg --config nfpm.yaml --packager deb --target sailer_${VERSION}_amd64.deb
-          nfpm pkg --config nfpm.yaml --packager rpm --target sailer-${VERSION}-1.x86_64.rpm
-
-      - name: Build Arch Package (.zst)
-        run: |
-          export VERSION=${GITHUB_REF_NAME#v}
-          # Patch PKGBUILD version and source for local CI build
-          sed -i "s/^pkgver=.*/pkgver=${VERSION}/" installer/PKGBUILD
-          sed -i 's|^source=.*|source=("sailer::..")|' installer/PKGBUILD
-          sed -i 's|^sha256sums=.*|sha256sums=("SKIP")|' installer/PKGBUILD
-          sed -i 's|cd "$pkgname-$pkgver"|cd "$srcdir/sailer"|' installer/PKGBUILD
-        
-      - name: Run makepkg
-        uses: heyhusen/archlinux-package-action@v3.0.0
-        with:
-          pkgdir: installer
-          flags: '-cfs --noconfirm'
-
       - name: Generate Changelog
         id: changelog
         run: |
@@ -91,84 +61,13 @@ jobs:
           else
             git log --pretty=format:"* %s (%h)" ${PREVIOUS_TAG}..${GITHUB_REF_NAME} > CHANGELOG.md
           fi
-          echo "REPORT=$(cat CHANGELOG.md)" >> $GITHUB_OUTPUT
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           body_path: CHANGELOG.md
           files: |
-            sailer_*.deb
-            sailer-*.rpm
-            installer/*.pkg.tar.zst
+            zig-out/bin/sailer
+            zig-out/bin/sailer-mcp
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  publish-aur:
-    name: Publish to AUR
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Publish AUR package
-        uses: ksylvester/ok-aur-action@v3
-        with:
-          package-name: sailer
-          ssh-private-key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-          # The action automatically handles .SRCINFO and pushing
-
-  publish-ppa:
-    name: Publish to PPA
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install packaging tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y debhelper devscripts dput gnupg2
-
-      - name: Import GPG key
-        run: |
-          echo "${{ secrets.LAUNCHPAD_GPG_PRIVATE_KEY }}" | gpg --batch --import
-          # Create a dummy passphrase file for debuild if needed
-          echo "allow-preset-passphrase" >> ~/.gnupg/gpg-agent.conf
-          gpg-connect-agent reloadagent /bye
-
-      - name: Prepare Source Package
-        run: |
-          VERSION=${GITHUB_REF_NAME#v}
-          # Basic debianization for source package
-          mkdir -p debian
-          echo "sailer ($VERSION) unstable; urgency=medium" > debian/changelog
-          echo "  * Automated release $VERSION" >> debian/changelog
-          echo " -- Sidharth Arya <sidharth@example.com>  $(date -R)" >> debian/changelog
-          # (Add control, rules, etc. files here or ensure they exist)
-          
-      - name: Sign & Upload to PPA
-        run: |
-          debuild -S -sa -k"${{ secrets.GPG_KEY_ID }}" -p"gpg --batch --passphrase ${{ secrets.LAUNCHPAD_PASSPHRASE }} --pinentry-mode loopback"
-          dput ${{ vars.LAUNCHPAD_PPA || 'ppa:arya/sailer' }} ../sailer_${VERSION}_source.changes
-        env:
-          DEB_SIGN_KEYID: ${{ secrets.GPG_KEY_ID }}
-
-  publish-copr:
-    name: Publish to COPR
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Submit to COPR
-        uses: fedora-copr/copr-action@v1
-        with:
-          project: ${{ vars.COPR_PROJECT || 'arya/sailer' }}
-          spec-path: installer/sailer.spec
-          api-token: ${{ secrets.COPR_API_TOKEN }}
