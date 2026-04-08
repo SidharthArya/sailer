@@ -2,6 +2,7 @@ const std = @import("std");
 const wl = @import("wayland").server.wl;
 const wlr = @import("wlroots");
 const xkb = @import("xkbcommon");
+const c = @import("c.zig").c;
 // No Server import to break circular dependency
 
 pub const KeyboardDevice = extern struct {
@@ -104,7 +105,19 @@ fn handleKey(listener: *wl.Listener(*wlr.Keyboard.event.Key), event: *wlr.Keyboa
                 server.last_mod_tap_ready = false;
                 server.last_mod_sym = null;
                 if (server.active_session_lock == null) {
-                    if (server.handleKeybind(syms, mods)) {
+                    var fallback_syms: []const xkb.Keysym = &.{};
+                    if (mods.shift) {
+                        const keymap_ptr = @as(*c.xkb_keymap, @ptrCast(wlr_keyboard.keymap.?));
+                        const state_ptr = @as(*c.xkb_state, @ptrCast(state));
+                        const layout = c.xkb_state_key_get_layout(state_ptr, keycode);
+                        var fallback_syms_ptr: [*c]const c.xkb_keysym_t = undefined;
+                        const num_fallback = c.xkb_keymap_key_get_syms_by_level(keymap_ptr, keycode, layout, 0, &fallback_syms_ptr);
+                        if (num_fallback > 0) {
+                            fallback_syms = @as([]const xkb.Keysym, @ptrCast(fallback_syms_ptr[0..@intCast(num_fallback)]));
+                        }
+                    }
+
+                    if (server.handleKeybind(syms, mods, fallback_syms)) {
                         handled = true;
                     }
                 }
@@ -121,7 +134,7 @@ fn handleKey(listener: *wl.Listener(*wlr.Keyboard.event.Key), event: *wlr.Keyboa
                             if (@intFromEnum(sym) == @intFromEnum(last_sym)) {
                                 if (server.current_sequence.items.len == 0) {
                                     std.log.debug("Modifier Tap detected: sym={}", .{sym});
-                                    _ = server.handleKeybind(syms, mods);
+                                    _ = server.handleKeybind(syms, mods, &.{});
                                 }
                                 break;
                             }

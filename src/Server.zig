@@ -1690,79 +1690,80 @@ pub const Server = struct {
         return false;
     }
 
-    pub fn handleKeybind(server: *Server, syms: []const xkb.Keysym, mods: wlr.Keyboard.ModifierMask) bool {
-        // We try to match each sym. If any sym results in a partial or full match, we keep that state.
-        // We only append to the sequence ONCE per event.
-        // Usually, we just pick the first sym for now to keep it simple but correct.
+    pub fn handleKeybind(server: *Server, syms: []const xkb.Keysym, mods: wlr.Keyboard.ModifierMask, fallback_syms: []const xkb.Keysym) bool {
         if (syms.len == 0) return false;
-        const key = syms[0];
 
-        server.current_sequence.append(std.heap.c_allocator, .{ .sym = key, .mods = mods }) catch return false;
-        server.sequence_timer.timerUpdate(1000) catch {};
+        const options = [_][]const xkb.Keysym{ syms, fallback_syms };
+        const original_len = server.current_sequence.items.len;
 
-        const current = server.current_sequence.items;
-        std.log.debug("Check bind: sym={}, mods={}, sequence_len={}", .{ key, mods, current.len });
+        for (options, 0..) |sym_slice, opt_idx| {
+            if (sym_slice.len == 0) continue;
+            const key = sym_slice[0];
+            if (opt_idx > 0 and key == syms[0]) continue;
 
-        var any_match = false;
-        var full_match = false;
+            // Roll back to original state before trying a new option
+            server.current_sequence.items.len = original_len;
+            server.current_sequence.append(std.heap.c_allocator, .{ .sym = key, .mods = mods }) catch return false;
+            
+            const current = server.current_sequence.items;
+            std.log.debug("Check bind (opt {}): sym={}, mods={}, sequence_len={}", .{ opt_idx, key, mods, current.len });
 
-        for (server.config.keybindings) |kb| {
-            if (kb.sequence) |seq| {
-                if (current.len <= seq.len) {
-                    var match = true;
-                    for (current, 0..) |step, i| {
-                        if (!matchKey(seq[i], step.sym, step.mods, true)) {
-                            match = false;
-                            break;
+            var any_match = false;
+            var full_match = false;
+
+            for (server.config.keybindings) |kb| {
+                if (kb.sequence) |seq| {
+                    if (current.len <= seq.len) {
+                        var match = true;
+                        for (current, 0..) |step, i| {
+                            if (!matchKey(seq[i], step.sym, step.mods, true)) {
+                                match = false;
+                                break;
+                            }
+                        }
+                        if (match) {
+                            any_match = true;
+                            if (current.len == seq.len) {
+                                std.log.debug("Full sequence match found!", .{});
+                                if (kb.action) |action| {
+                                    server.executeAction(action, kb, null);
+                                }
+                                full_match = true;
+                                break;
+                            } else {
+                                std.log.debug("Partial sequence match (prefix).", .{});
+                            }
                         }
                     }
-                    if (match) {
-                        any_match = true;
-                        if (current.len == seq.len) {
-                            std.log.debug("Full sequence match found!", .{});
+                } else {
+                    if (current.len == 1 and matchKey(kb, key, mods, false)) {
+                        std.log.debug("Single keybind match found!", .{});
                         if (kb.action) |action| {
                             server.executeAction(action, kb, null);
                         }
-                            full_match = true;
-                            break;
-                        } else {
-                            std.log.debug("Partial sequence match (prefix).", .{});
-                        }
+                        any_match = true;
+                        full_match = true;
+                        break;
                     }
                 }
-            } else {
-                if (current.len == 1 and matchKey(kb, key, mods, false)) {
-                    std.log.debug("Single keybind match found!", .{});
-                    if (kb.action) |action| {
-                        server.executeAction(action, kb, null);
-                    }
-                    any_match = true;
-                    full_match = true;
-                    break;
-                }
+            }
+
+            if (full_match) {
+                server.current_sequence.clearRetainingCapacity();
+                server.sequence_timer.timerUpdate(0) catch {};
+                return true;
+            }
+
+            if (any_match) {
+                server.sequence_timer.timerUpdate(1000) catch {};
+                return true;
             }
         }
 
-        if (full_match) {
-            server.current_sequence.clearRetainingCapacity();
-            server.sequence_timer.timerUpdate(0) catch {};
-            return true;
+        // If we reach here, no match was found for any option
+        if (original_len > 0) {
+            std.log.debug("Sequence mismatch mid-flight, clearing.", .{});
         }
-
-        if (any_match) {
-            return true;
-        }
-
-        // If no match was found, but it could be a prefix of some other sequence, keep it.
-        // Otherwise, if this was the first key and no match/prefix, clear and let it through.
-        if (current.len == 1) {
-            std.log.debug("No match for first key in sequence, clearing.", .{});
-            server.current_sequence.clearRetainingCapacity();
-            server.sequence_timer.timerUpdate(0) catch {};
-            return false;
-        }
-
-        std.log.debug("Sequence mismatch mid-flight, clearing.", .{});
         server.current_sequence.clearRetainingCapacity();
         server.sequence_timer.timerUpdate(0) catch {};
         return false;
