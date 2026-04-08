@@ -81,7 +81,7 @@ pub const IpcServer = struct {
     fn isKnownMutatingCommand(cmd: []const u8) bool {
         if (isSimpleAction(cmd)) return true;
         const arg_commands = [_][]const u8{
-            "spawn", "focus_window", "switch_workspace", "type_text", "set_display_mode",
+            "spawn", "focus_window", "switch_workspace", "move_to_workspace", "type_text", "set_display_mode",
         };
         for (arg_commands) |c| {
             if (std.mem.eql(u8, cmd, c)) return true;
@@ -384,6 +384,32 @@ pub const IpcServer = struct {
                 return;
             }
             self.server.switchToWorkspace(index - 1);
+            _ = std.posix.write(fd, "{\"ok\":true}\n") catch {};
+        } else if (std.mem.eql(u8, cmd, "move_to_workspace")) {
+            const index_val = args.object.get("index") orelse {
+                _ = std.posix.write(fd, "{\"ok\":false,\"error\":\"missing index\"}\n") catch {};
+                return;
+            };
+            const index: u32 = switch (index_val) {
+                .integer => |n| @intCast(n),
+                .string => |s| std.fmt.parseInt(u32, s, 10) catch {
+                    _ = std.posix.write(fd, "{\"ok\":false,\"error\":\"invalid index\"}\n") catch {};
+                    return;
+                },
+                else => {
+                    _ = std.posix.write(fd, "{\"ok\":false,\"error\":\"invalid index type\"}\n") catch {};
+                    return;
+                },
+            };
+            if (index == 0 or index > self.server.workspaces.len) {
+                _ = std.posix.write(fd, "{\"ok\":false,\"error\":\"index out of range\"}\n") catch {};
+                return;
+            }
+            const Keybinding = @import("Config.zig").Keybinding;
+            var kb: Keybinding = .{};
+            kb.action = .move_workspace;
+            kb.workspace_index = index;
+            self.server.executeAction(.move_workspace, kb, null);
             _ = std.posix.write(fd, "{\"ok\":true}\n") catch {};
 
         } else if (std.mem.eql(u8, cmd, "type_text")) {

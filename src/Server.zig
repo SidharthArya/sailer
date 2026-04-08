@@ -1512,6 +1512,37 @@ pub const Server = struct {
             .switch_workspace => if (kb.workspace_index) |idx| {
                 server.switchToWorkspace(idx - 1);
             },
+            .move_workspace => if (kb.workspace_index) |idx| {
+                if (idx > 0 and idx <= server.workspaces.len) {
+                    const target_ws = server.workspaces[idx - 1];
+                    if (toplevel) |t| {
+                        if (t.workspace != target_ws) {
+                            const old_ws = t.workspace;
+                            t.link.remove();
+                            t.focus_link.remove();
+                            target_ws.views.prepend(t);
+                            target_ws.focus_history.prepend(t);
+                            t.workspace = target_ws;
+                            t.scene_tree.node.reparent(target_ws.scene_tree);
+                            
+                            old_ws.arrange();
+                            target_ws.arrange();
+
+                            // If we moved the focused window, focus the next one in the old workspace
+                            if (server.seat.keyboard_state.focused_surface == t.xdg_toplevel.base.surface) {
+                                if (old_ws.views.link.next != &old_ws.views.link) {
+                                    const head = old_ws.views.link.next.?;
+                                    const next_t: *Toplevel = @fieldParentPtr("link", head);
+                                    server.focusView(next_t, next_t.xdg_toplevel.base.surface);
+                                } else {
+                                    wlr.Seat.keyboardNotifyClearFocus(server.seat);
+                                }
+                            }
+                            server.refreshBars();
+                        }
+                    }
+                }
+            },
             .get_screenshot, .screenshot => server.takeScreenshot(),
             .set_display_mode => if (kb.display_mode) |mode| {
                 server.display_mode = mode;

@@ -14,6 +14,7 @@ pub const Action = enum {
     reorder_left,
     reorder_right,
     switch_workspace,
+    move_workspace,
     toggle_layout,
     smart_view,
     terminate,

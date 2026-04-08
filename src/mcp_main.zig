@@ -153,6 +153,7 @@ const tools = [_]ToolDef{
     .{ .name = "toggle_urgent", .description = "Toggle urgent state on the focused window" },
     // Workspace
     .{ .name = "switch_workspace", .description = "Switch to a workspace by index (1-10)", .has_args = true, .properties_json = "{\"index\":{\"type\":\"integer\",\"description\":\"Workspace index (1-10)\"}}", .required_json = "[\"index\"]" },
+    .{ .name = "move_to_workspace", .description = "Move the focused window to a specific workspace by index (1-10)", .has_args = true, .properties_json = "{\"index\":{\"type\":\"integer\",\"description\":\"Workspace index (1-10)\"}}", .required_json = "[\"index\"]" },
     // Layout
     .{ .name = "toggle_layout", .description = "Toggle between ribbon and tiling layout" },
     .{ .name = "toggle_floating_layout", .description = "Toggle floating layout mode" },
@@ -296,6 +297,12 @@ fn processMessage(socket_path: []const u8, body: []const u8, stdout_fd: std.posi
                 return;
             }).integer;
             try ipc_req.writer(gpa).print("{{\"cmd\":\"switch_workspace\",\"args\":{{\"index\":{d}}}}}", .{index});
+        } else if (std.mem.eql(u8, tool_name, "move_to_workspace")) {
+            const index = (args.object.get("index") orelse {
+                try sendError(stdout_fd, id, "missing index");
+                return;
+            }).integer;
+            try ipc_req.writer(gpa).print("{{\"cmd\":\"move_to_workspace\",\"args\":{{\"index\":{d}}}}}", .{index});
         } else if (std.mem.eql(u8, tool_name, "type_text")) {
             const text = (args.object.get("text") orelse {
                 try sendError(stdout_fd, id, "missing text");
