@@ -1387,7 +1387,7 @@ pub const Server = struct {
         }
     }
 
-    fn executeAction(server: *Server, action: Action, kb: Keybinding, target: ?*Toplevel) void {
+    pub fn executeAction(server: *Server, action: Action, kb: Keybinding, target: ?*Toplevel) void {
         const toplevel = target orelse if (server.seat.keyboard_state.focused_surface) |surface| blk: {
             if (wlr.XdgSurface.tryFromWlrSurface(surface)) |xdg_surface| {
                 break :blk View.fromXdgSurface(xdg_surface);
@@ -1761,14 +1761,25 @@ pub const Server = struct {
 pub const LidSwitchHandler = struct {
     server: *Server,
     toggle_listener: wl.Listener(*wlr.Switch.event.Toggle),
+    destroy_listener: wl.Listener(*wlr.InputDevice),
 
     pub fn create(server: *Server, wlr_switch: *wlr.Switch) !*LidSwitchHandler {
         const handler = try std.heap.c_allocator.create(LidSwitchHandler);
         handler.server = server;
         handler.toggle_listener = .init(handleToggle);
+        handler.destroy_listener = .init(handleDestroy);
         wlr_switch.events.toggle.add(&handler.toggle_listener);
+        wlr_switch.base.events.destroy.add(&handler.destroy_listener);
         std.log.info("Lid switch handler created", .{});
         return handler;
+    }
+
+    fn handleDestroy(listener: *wl.Listener(*wlr.InputDevice), _: *wlr.InputDevice) void {
+        const handler: *LidSwitchHandler = @fieldParentPtr("destroy_listener", listener);
+        handler.toggle_listener.link.remove();
+        handler.destroy_listener.link.remove();
+        std.log.info("Lid switch handler destroyed", .{});
+        std.heap.c_allocator.destroy(handler);
     }
 
     fn handleToggle(listener: *wl.Listener(*wlr.Switch.event.Toggle), event: *wlr.Switch.event.Toggle) void {
@@ -1838,3 +1849,4 @@ pub const LidSwitchHandler = struct {
         server.updateLayout();
     }
 };
+

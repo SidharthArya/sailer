@@ -1,6 +1,8 @@
 const std = @import("std");
 const wl = @import("wayland").server.wl;
 const Server = @import("Server.zig").Server;
+const Action = @import("Config.zig").Action;
+const DisplayMode = @import("Config.zig").DisplayMode;
 
 /// A pending command from the IPC thread, to be executed on the main Wayland thread.
 const PendingCmd = struct {
@@ -26,6 +28,66 @@ pub const IpcServer = struct {
     // Queue of pending mutating commands (protected by mutex).
     queue_mutex: std.Thread.Mutex = .{},
     queue: std.ArrayListUnmanaged(PendingCmd) = .{},
+
+    // Simple actions that take no arguments — mapped from command name to Action enum.
+    const simple_actions = [_]struct { name: []const u8, action: Action }{
+        .{ .name = "focus_left", .action = .focus_left },
+        .{ .name = "focus_right", .action = .focus_right },
+        .{ .name = "focus_output", .action = .focus_output },
+        .{ .name = "close", .action = .close },
+        .{ .name = "resize_shrink", .action = .resize_shrink },
+        .{ .name = "resize_expand", .action = .resize_expand },
+        .{ .name = "move_left", .action = .move_left },
+        .{ .name = "move_right", .action = .move_right },
+        .{ .name = "move_up", .action = .move_up },
+        .{ .name = "move_down", .action = .move_down },
+        .{ .name = "reorder_left", .action = .reorder_left },
+        .{ .name = "reorder_right", .action = .reorder_right },
+        .{ .name = "toggle_layout", .action = .toggle_layout },
+        .{ .name = "toggle_floating_layout", .action = .toggle_floating_layout },
+        .{ .name = "toggle_tiling_layout", .action = .toggle_tiling_layout },
+        .{ .name = "toggle_ribbon_layout", .action = .toggle_ribbon_layout },
+        .{ .name = "smart_view", .action = .smart_view },
+        .{ .name = "toggle_maximize", .action = .toggle_maximize },
+        .{ .name = "toggle_fullscreen", .action = .toggle_fullscreen },
+        .{ .name = "toggle_floating", .action = .toggle_floating },
+        .{ .name = "toggle_hidden", .action = .toggle_hidden },
+        .{ .name = "toggle_locked", .action = .toggle_locked },
+        .{ .name = "toggle_sticky", .action = .toggle_sticky },
+        .{ .name = "toggle_private", .action = .toggle_private },
+        .{ .name = "toggle_marked", .action = .toggle_marked },
+        .{ .name = "toggle_urgent", .action = .toggle_urgent },
+        .{ .name = "cycle_display_mode", .action = .cycle_display_mode },
+        .{ .name = "terminate", .action = .terminate },
+        .{ .name = "reload_config", .action = .reload_config },
+        .{ .name = "get_screenshot", .action = .get_screenshot },
+    };
+
+    fn isSimpleAction(cmd: []const u8) bool {
+        for (simple_actions) |entry| {
+            if (std.mem.eql(u8, cmd, entry.name)) return true;
+        }
+        return false;
+    }
+
+    fn getSimpleAction(cmd: []const u8) ?Action {
+        for (simple_actions) |entry| {
+            if (std.mem.eql(u8, cmd, entry.name)) return entry.action;
+        }
+        return null;
+    }
+
+    // All known mutating command names (simple actions + commands with args)
+    fn isKnownMutatingCommand(cmd: []const u8) bool {
+        if (isSimpleAction(cmd)) return true;
+        const arg_commands = [_][]const u8{
+            "spawn", "focus_window", "switch_workspace", "type_text", "set_display_mode",
+        };
+        for (arg_commands) |c| {
+            if (std.mem.eql(u8, cmd, c)) return true;
+        }
+        return false;
+    }
 
     pub fn init(server: *Server, allocator: std.mem.Allocator) !*IpcServer {
         const self = try allocator.create(IpcServer);
@@ -206,12 +268,8 @@ pub const IpcServer = struct {
             }
         }
 
-        // Unknown command
-        if (!std.mem.eql(u8, cmd, "spawn") and
-            !std.mem.eql(u8, cmd, "focus_window") and
-            !std.mem.eql(u8, cmd, "switch_workspace") and
-            !std.mem.eql(u8, cmd, "type_text"))
-        {
+        // Unknown command check
+        if (!isKnownMutatingCommand(cmd)) {
             var resp_buf: [256]u8 = undefined;
             const resp = std.fmt.bufPrint(&resp_buf, "{{\"ok\":false,\"error\":\"unknown command: {s}\"}}\n", .{cmd}) catch "{\"ok\":false,\"error\":\"unknown command\"}\n";
             _ = std.posix.write(fd, resp) catch {};
@@ -265,6 +323,15 @@ pub const IpcServer = struct {
         const cmd = root.object.get("cmd").?.string;
         const args = root.object.get("args") orelse std.json.Value{ .object = std.json.ObjectMap.init(self.allocator) };
 
+        // Simple no-arg actions — dispatch through executeAction
+        if (getSimpleAction(cmd)) |action| {
+            const Keybinding = @import("Config.zig").Keybinding;
+            const kb: Keybinding = .{};
+            self.server.executeAction(action, kb, null);
+            _ = std.posix.write(fd, "{\"ok\":true}\n") catch {};
+            return;
+        }
+
         if (std.mem.eql(u8, cmd, "spawn")) {
             const command = args.object.get("command").?.string;
             self.server.spawn(command);
@@ -295,7 +362,8 @@ pub const IpcServer = struct {
                 _ = std.posix.write(fd, "{\"ok\":false,\"error\":\"window not found\"}\n") catch {};
             }
 
-        } else if (std.mem.eql(u8, cmd, "switch_workspace")) {            const index_val = args.object.get("index") orelse {
+        } else if (std.mem.eql(u8, cmd, "switch_workspace")) {
+            const index_val = args.object.get("index") orelse {
                 _ = std.posix.write(fd, "{\"ok\":false,\"error\":\"missing index\"}\n") catch {};
                 return;
             };
@@ -325,6 +393,25 @@ pub const IpcServer = struct {
             }).string;
             self.server.typeText(text);
             _ = std.posix.write(fd, "{\"ok\":true}\n") catch {};
+
+        } else if (std.mem.eql(u8, cmd, "set_display_mode")) {
+            const mode_str = (args.object.get("mode") orelse {
+                _ = std.posix.write(fd, "{\"ok\":false,\"error\":\"missing mode\"}\n") catch {};
+                return;
+            }).string;
+            const mode: DisplayMode = if (std.mem.eql(u8, mode_str, "discrete"))
+                .discrete
+            else if (std.mem.eql(u8, mode_str, "spanned"))
+                .spanned
+            else if (std.mem.eql(u8, mode_str, "mirror"))
+                .mirror
+            else {
+                _ = std.posix.write(fd, "{\"ok\":false,\"error\":\"invalid mode, use: discrete, spanned, mirror\"}\n") catch {};
+                return;
+            };
+            self.server.display_mode = mode;
+            self.server.updateLayout();
+            _ = std.posix.write(fd, "{\"ok\":true}\n") catch {};
         }
     }
 
@@ -343,7 +430,11 @@ pub const IpcServer = struct {
                 const app_id = std.mem.span(view.xdg_toplevel.app_id orelse "unknown");
                 const focused = self.server.seat.keyboard_state.focused_surface == view.xdg_toplevel.base.surface;
                 if (!first) try out.appendSlice(self.allocator, ",");
-                try out.writer(self.allocator).print("{{\"title\":\"{s}\",\"app_id\":\"{s}\",\"focused\":{},\"workspace\":\"{s}\"}}", .{ title, app_id, focused, ws.name });
+                try out.writer(self.allocator).print("{{\"title\":\"{s}\",\"app_id\":\"{s}\",\"focused\":{},\"workspace\":\"{s}\",\"hidden\":{},\"floating\":{},\"maximized\":{},\"fullscreen\":{},\"locked\":{},\"sticky\":{},\"marked\":{},\"urgent\":{}}}", .{
+                    title, app_id, focused, ws.name,
+                    view.hidden, view.is_floating, view.is_maximized, view.is_fullscreen,
+                    view.locked, view.sticky, view.marked, view.urgent,
+                });
                 first = false;
             }
         }
@@ -359,7 +450,7 @@ pub const IpcServer = struct {
             const focused = self.server.focused_workspace == ws;
             const has_views = ws.views.link.next != &ws.views.link;
             if (i > 0) try out.appendSlice(self.allocator, ",");
-            try out.writer(self.allocator).print("{{\"index\":{d},\"name\":\"{s}\",\"focused\":{},\"has_views\":{}}}", .{ i + 1, ws.name, focused, has_views });
+            try out.writer(self.allocator).print("{{\"index\":{d},\"name\":\"{s}\",\"focused\":{},\"has_views\":{},\"layout\":\"{s}\"}}", .{ i + 1, ws.name, focused, has_views, ws.layout.name() });
         }
         try out.appendSlice(self.allocator, "]}\n");
         _ = std.posix.write(fd, out.items) catch {};

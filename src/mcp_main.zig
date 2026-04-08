@@ -110,6 +110,82 @@ fn sendToIpc(socket_path: []const u8, request: []const u8) ![]u8 {
     return gpa.dupe(u8, buf[0..end]);
 }
 
+/// Tool definitions for tools/list. Each has a name, description, and inputSchema.
+const ToolDef = struct {
+    name: []const u8,
+    description: []const u8,
+    has_args: bool = false,
+    /// JSON fragment for properties (only if has_args is true)
+    properties_json: []const u8 = "{}",
+    /// JSON array fragment for required fields (only if has_args is true)
+    required_json: []const u8 = "[]",
+};
+
+const tools = [_]ToolDef{
+    // Queries
+    .{ .name = "list_windows", .description = "List all open windows with their states (title, app_id, workspace, hidden, floating, maximized, fullscreen, locked, sticky, marked, urgent)" },
+    .{ .name = "get_workspaces", .description = "List all workspaces with their state (name, focused, has_views, layout)" },
+    // Spawn
+    .{ .name = "spawn", .description = "Execute a shell command in the compositor environment", .has_args = true, .properties_json = "{\"command\":{\"type\":\"string\",\"description\":\"Shell command to run\"}}", .required_json = "[\"command\"]" },
+    // Focus / navigation
+    .{ .name = "focus_window", .description = "Focus a window by title (substring match)", .has_args = true, .properties_json = "{\"title\":{\"type\":\"string\",\"description\":\"Window title to search for\"}}", .required_json = "[\"title\"]" },
+    .{ .name = "focus_left", .description = "Focus the window to the left" },
+    .{ .name = "focus_right", .description = "Focus the window to the right" },
+    .{ .name = "focus_output", .description = "Cycle focus to the next monitor" },
+    // Window manipulation
+    .{ .name = "close", .description = "Close the focused window" },
+    .{ .name = "resize_shrink", .description = "Shrink the focused window" },
+    .{ .name = "resize_expand", .description = "Expand the focused window" },
+    .{ .name = "move_left", .description = "Move the focused window left" },
+    .{ .name = "move_right", .description = "Move the focused window right" },
+    .{ .name = "move_up", .description = "Move the focused window up" },
+    .{ .name = "move_down", .description = "Move the focused window down" },
+    .{ .name = "reorder_left", .description = "Reorder the focused window left in the stack" },
+    .{ .name = "reorder_right", .description = "Reorder the focused window right in the stack" },
+    .{ .name = "toggle_maximize", .description = "Toggle maximize on the focused window" },
+    .{ .name = "toggle_fullscreen", .description = "Toggle fullscreen on the focused window" },
+    .{ .name = "toggle_floating", .description = "Toggle floating mode on the focused window" },
+    .{ .name = "toggle_hidden", .description = "Toggle hidden state on the focused window" },
+    .{ .name = "toggle_locked", .description = "Toggle locked state on the focused window" },
+    .{ .name = "toggle_sticky", .description = "Toggle sticky state on the focused window" },
+    .{ .name = "toggle_private", .description = "Toggle private state on the focused window" },
+    .{ .name = "toggle_marked", .description = "Toggle marked state on the focused window" },
+    .{ .name = "toggle_urgent", .description = "Toggle urgent state on the focused window" },
+    // Workspace
+    .{ .name = "switch_workspace", .description = "Switch to a workspace by index (1-10)", .has_args = true, .properties_json = "{\"index\":{\"type\":\"integer\",\"description\":\"Workspace index (1-10)\"}}", .required_json = "[\"index\"]" },
+    // Layout
+    .{ .name = "toggle_layout", .description = "Toggle between ribbon and tiling layout" },
+    .{ .name = "toggle_floating_layout", .description = "Toggle floating layout mode" },
+    .{ .name = "toggle_tiling_layout", .description = "Toggle tiling layout mode" },
+    .{ .name = "toggle_ribbon_layout", .description = "Toggle ribbon layout mode" },
+    .{ .name = "smart_view", .description = "Toggle smart grid overview of all windows" },
+    // Display mode
+    .{ .name = "set_display_mode", .description = "Set multi-monitor display mode", .has_args = true, .properties_json = "{\"mode\":{\"type\":\"string\",\"enum\":[\"discrete\",\"spanned\",\"mirror\"],\"description\":\"Display mode\"}}", .required_json = "[\"mode\"]" },
+    .{ .name = "cycle_display_mode", .description = "Cycle through display modes (discrete → spanned → mirror)" },
+    // Text input
+    .{ .name = "type_text", .description = "Type text into the currently focused window", .has_args = true, .properties_json = "{\"text\":{\"type\":\"string\",\"description\":\"Text to type\"}}", .required_json = "[\"text\"]" },
+    // Screenshot
+    .{ .name = "get_screenshot", .description = "Capture a screenshot" },
+    // Compositor control
+    .{ .name = "reload_config", .description = "Reload the compositor configuration" },
+    .{ .name = "terminate", .description = "Terminate the compositor" },
+};
+
+/// Simple tools that map directly to an IPC command with no arguments.
+fn isSimpleTool(name: []const u8) bool {
+    for (tools) |t| {
+        if (std.mem.eql(u8, t.name, name) and !t.has_args) return true;
+    }
+    return false;
+}
+
+fn isKnownTool(name: []const u8) bool {
+    for (tools) |t| {
+        if (std.mem.eql(u8, t.name, name)) return true;
+    }
+    return false;
+}
+
 fn processMessage(socket_path: []const u8, body: []const u8, stdout_fd: std.posix.fd_t) !void {
     const parsed = std.json.parseFromSlice(std.json.Value, gpa, body, .{ .ignore_unknown_fields = true }) catch {
         try sendError(stdout_fd, null, "invalid json");
@@ -128,7 +204,7 @@ fn processMessage(socket_path: []const u8, body: []const u8, stdout_fd: std.posi
         try sendResponse(stdout_fd, id, .{
             .protocolVersion = "2024-11-05",
             .capabilities = .{ .tools = .{ .listChanged = false } },
-            .serverInfo = .{ .name = "sailer-mcp", .version = "0.1.0" },
+            .serverInfo = .{ .name = "sailer-mcp", .version = "0.2.0" },
         });
         std.log.info("mcp: initialized successfully", .{});
         return;
@@ -153,46 +229,67 @@ fn processMessage(socket_path: []const u8, body: []const u8, stdout_fd: std.posi
     }
 
     if (std.mem.eql(u8, method, "tools/list")) {
-        const tools_json =
-            "{\"tools\":[" ++
-            "{\"name\":\"spawn\",\"description\":\"Execute a shell command\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\"}},\"required\":[\"command\"]}}," ++
-            "{\"name\":\"list_windows\",\"description\":\"List all open windows\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}," ++
-            "{\"name\":\"focus_window\",\"description\":\"Focus a window by title\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"title\":{\"type\":\"string\"}},\"required\":[\"title\"]}}," ++
-            "{\"name\":\"get_workspaces\",\"description\":\"List all workspaces\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}," ++
-            "{\"name\":\"switch_workspace\",\"description\":\"Switch to a workspace by index\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"index\":{\"type\":\"integer\"}},\"required\":[\"index\"]}}," ++
-            "{\"name\":\"type_text\",\"description\":\"Type text into the currently focused window\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"}},\"required\":[\"text\"]}}" ++
-            "]}";
-        try sendRawResponse(stdout_fd, id, tools_json);
+        // Build tools/list response dynamically from the tools array
+        var tools_json = std.ArrayListUnmanaged(u8){};
+        defer tools_json.deinit(gpa);
+        try tools_json.appendSlice(gpa, "{\"tools\":[");
+        for (tools, 0..) |t, i| {
+            if (i > 0) try tools_json.appendSlice(gpa, ",");
+            try tools_json.writer(gpa).print("{{\"name\":\"{s}\",\"description\":\"{s}\",\"inputSchema\":{{\"type\":\"object\",\"properties\":{s}", .{
+                t.name, t.description, t.properties_json,
+            });
+            if (t.has_args) {
+                try tools_json.writer(gpa).print(",\"required\":{s}", .{t.required_json});
+            }
+            try tools_json.appendSlice(gpa, "}}");
+        }
+        try tools_json.appendSlice(gpa, "]}");
+        try sendRawResponse(stdout_fd, id, tools_json.items);
         return;
     }
-
-
 
     if (std.mem.eql(u8, method, "tools/call")) {
         const params = root.object.get("params") orelse return;
         const tool_name = (params.object.get("name") orelse return).string;
         const args = params.object.get("arguments") orelse std.json.Value{ .object = std.json.ObjectMap.init(gpa) };
 
+        if (!isKnownTool(tool_name)) {
+            try sendError(stdout_fd, id, "unknown tool");
+            return;
+        }
+
         // Build IPC request
         var ipc_req = std.ArrayListUnmanaged(u8){};
         defer ipc_req.deinit(gpa);
 
-        if (std.mem.eql(u8, tool_name, "spawn")) {
+        // Simple no-arg tools: just send {"cmd":"<name>"}
+        if (isSimpleTool(tool_name)) {
+            try ipc_req.writer(gpa).print("{{\"cmd\":\"{s}\"}}", .{tool_name});
+        } else if (std.mem.eql(u8, tool_name, "spawn")) {
             const cmd = (args.object.get("command") orelse {
                 try sendError(stdout_fd, id, "missing command");
                 return;
             }).string;
-            try ipc_req.writer(gpa).print("{{\"cmd\":\"spawn\",\"args\":{{\"command\":\"{s}\"}}}}", .{cmd});
-        } else if (std.mem.eql(u8, tool_name, "list_windows")) {
-            try ipc_req.appendSlice(gpa, "{\"cmd\":\"list_windows\"}");
+            // Escape for JSON embedding
+            var escaped = std.ArrayListUnmanaged(u8){};
+            defer escaped.deinit(gpa);
+            for (cmd) |ch| {
+                if (ch == '"' or ch == '\\') try escaped.append(gpa, '\\');
+                try escaped.append(gpa, ch);
+            }
+            try ipc_req.writer(gpa).print("{{\"cmd\":\"spawn\",\"args\":{{\"command\":\"{s}\"}}}}", .{escaped.items});
         } else if (std.mem.eql(u8, tool_name, "focus_window")) {
             const title = (args.object.get("title") orelse {
                 try sendError(stdout_fd, id, "missing title");
                 return;
             }).string;
-            try ipc_req.writer(gpa).print("{{\"cmd\":\"focus_window\",\"args\":{{\"title\":\"{s}\"}}}}", .{title});
-        } else if (std.mem.eql(u8, tool_name, "get_workspaces")) {
-            try ipc_req.appendSlice(gpa, "{\"cmd\":\"get_workspaces\"}");
+            var escaped = std.ArrayListUnmanaged(u8){};
+            defer escaped.deinit(gpa);
+            for (title) |ch| {
+                if (ch == '"' or ch == '\\') try escaped.append(gpa, '\\');
+                try escaped.append(gpa, ch);
+            }
+            try ipc_req.writer(gpa).print("{{\"cmd\":\"focus_window\",\"args\":{{\"title\":\"{s}\"}}}}", .{escaped.items});
         } else if (std.mem.eql(u8, tool_name, "switch_workspace")) {
             const index = (args.object.get("index") orelse {
                 try sendError(stdout_fd, id, "missing index");
@@ -204,7 +301,6 @@ fn processMessage(socket_path: []const u8, body: []const u8, stdout_fd: std.posi
                 try sendError(stdout_fd, id, "missing text");
                 return;
             }).string;
-            // Escape backslashes and quotes for JSON embedding
             var escaped = std.ArrayListUnmanaged(u8){};
             defer escaped.deinit(gpa);
             for (text) |ch| {
@@ -212,6 +308,12 @@ fn processMessage(socket_path: []const u8, body: []const u8, stdout_fd: std.posi
                 try escaped.append(gpa, ch);
             }
             try ipc_req.writer(gpa).print("{{\"cmd\":\"type_text\",\"args\":{{\"text\":\"{s}\"}}}}", .{escaped.items});
+        } else if (std.mem.eql(u8, tool_name, "set_display_mode")) {
+            const mode = (args.object.get("mode") orelse {
+                try sendError(stdout_fd, id, "missing mode");
+                return;
+            }).string;
+            try ipc_req.writer(gpa).print("{{\"cmd\":\"set_display_mode\",\"args\":{{\"mode\":\"{s}\"}}}}", .{mode});
         } else {
             try sendError(stdout_fd, id, "unknown tool");
             return;
