@@ -120,6 +120,7 @@ pub const Server = struct {
     active_session_lock: ?*SessionLock = null,
     lid_closed: bool = false,
     marked_mode: bool = false,
+    spawn_once_pids: std.AutoHashMapUnmanaged(u64, i32) = .{},
     listeners: Listeners,
 
     pub const Listeners = extern struct {
@@ -182,6 +183,7 @@ pub const Server = struct {
         server.active_session_lock = null;
         server.device_map = .{};
         server.marked_mode = false;
+        server.spawn_once_pids = .{};
 
         server.keyboards.init();
         server.outputs.init();
@@ -326,6 +328,7 @@ pub const Server = struct {
         }
 
         std.log.info("Running compositor on WAYLAND_DISPLAY={s}", .{server.socket_name});
+        server.applySpawnOnce();
 
         server.mcp = McpServer.init(server, std.heap.c_allocator) catch |err| blk: {
             std.log.err("failed to initialize MCP server: {}", .{err});
@@ -502,14 +505,47 @@ pub const Server = struct {
         }
     }
 
-    pub fn spawn(server: *Server, cmd: []const u8) void {        std.log.info("Compositor spawning command: {s}", .{cmd});
+    pub fn applySpawnOnce(self: *Server) void {
+        var new_hashes = std.AutoHashMap(u64, []const u8).init(std.heap.c_allocator);
+        defer new_hashes.deinit();
+
+        for (self.config.spawn_once) |cmd| {
+            const hash = std.hash.Wyhash.hash(0, cmd);
+            new_hashes.put(hash, cmd) catch continue;
+        }
+
+        // 1. Kill processes that are no longer in the config
+        var it = self.spawn_once_pids.iterator();
+        while (it.next()) |entry| {
+            if (!new_hashes.contains(entry.key_ptr.*)) {
+                const pid = entry.value_ptr.*;
+                std.log.info("Terminating unrequired managed process (PID={d})", .{pid});
+                _ = std.posix.system.kill(pid, std.posix.SIG.TERM);
+            }
+        }
+
+        // Note: Actual removal from the map happens in SIGCHLD handler to avoid races
+
+        // 2. Spawn new processes
+        var hit = new_hashes.iterator();
+        while (hit.next()) |entry| {
+            if (!self.spawn_once_pids.contains(entry.key_ptr.*)) {
+                if (self.spawn(entry.value_ptr.*)) |pid| {
+                    self.spawn_once_pids.put(std.heap.c_allocator, entry.key_ptr.*, pid) catch {};
+                }
+            }
+        }
+    }
+
+    pub fn spawn(server: *Server, cmd: []const u8) ?i32 {
+        std.log.info("Compositor spawning command: {s}", .{cmd});
 
         // TODO: Consider using posix.fork + posix.execve directly to avoid shell injection risk
         //       when cmd comes from untrusted sources (e.g. MCP tool calls).
         var child = std.process.Child.init(&[_][]const u8{ "/bin/sh", "-c", cmd }, std.heap.c_allocator);
         var env_map = std.process.getEnvMap(std.heap.c_allocator) catch |err| {
             std.log.err("Failed to get environment map for spawn: {}", .{err});
-            return;
+            return null;
         };
         defer env_map.deinit();
 
@@ -520,9 +556,10 @@ pub const Server = struct {
         child.env_map = &env_map;
         _ = child.spawn() catch |err| {
             std.log.err("Failed to spawn command '{s}': {}", .{ cmd, err });
-            return;
+            return null;
         };
-        std.log.info("Successfully spawned command '{s}' with WAYLAND_DISPLAY={s}", .{ cmd, server.socket_name });
+        std.log.info("Successfully spawned command '{s}' with WAYLAND_DISPLAY={s} (PID={d})", .{ cmd, server.socket_name, child.id });
+        return @intCast(child.id);
     }
 
     pub fn updateLayout(server: *Server) void {
@@ -612,13 +649,22 @@ pub const Server = struct {
         }
     }
 
-    fn handleSigChld(sig: i32, _: *Server) c_int {
+    fn handleSigChld(sig: i32, server: *Server) c_int {
         _ = sig;
         while (true) {
             var status: i32 = 0;
             // Use the low-level system call to avoid Zig's waitpid wrapper which panics on ECHILD (no more children)
             const rc = std.posix.system.waitpid(-1, &status, std.posix.W.NOHANG);
             if (rc <= 0) break;
+
+            // Remove the exited PID from managed processes tracking
+            var it = server.spawn_once_pids.iterator();
+            while (it.next()) |entry| {
+                if (entry.value_ptr.* == rc) {
+                    _ = server.spawn_once_pids.remove(entry.key_ptr.*);
+                    break;
+                }
+            }
         }
         return 0;
     }
@@ -648,6 +694,7 @@ pub const Server = struct {
         };
         
         server.config = new_config;
+        server.applySpawnOnce();
 
         // Clear scratchpad associations as keybinding pointers are now invalid
         for (server.workspaces) |ws| {
@@ -692,6 +739,13 @@ pub const Server = struct {
         for (server.workspaces) |ws| ws.deinit();
 
         server.current_sequence.deinit(std.heap.c_allocator);
+        // Terminate all managed processes
+        var it = server.spawn_once_pids.iterator();
+        while (it.next()) |entry| {
+            _ = std.posix.system.kill(entry.value_ptr.*, std.posix.SIG.TERM);
+        }
+        server.spawn_once_pids.deinit(std.heap.c_allocator);
+
         server.backend.destroy();
         server.wl_server.destroy();
     }
@@ -1585,7 +1639,7 @@ pub const Server = struct {
                 server.wl_server.terminate();
             },
             .spawn => if (kb.command) |cmd| {
-                server.spawn(cmd);
+                _ = server.spawn(cmd);
             },
             .focus_left => server.focused_workspace.focusRelative(-1),
             .focus_right => server.focused_workspace.focusRelative(1),
@@ -1748,7 +1802,7 @@ pub const Server = struct {
                     }) catch |err| {
                         std.log.err("Failed to register pending scratchpad: {}", .{err});
                     };
-                    server.spawn(cmd);
+                    _ = server.spawn(cmd);
                 }
             },
             .reload_config => server.reloadConfig(),

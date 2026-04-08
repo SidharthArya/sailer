@@ -334,7 +334,7 @@ pub const IpcServer = struct {
 
         if (std.mem.eql(u8, cmd, "spawn")) {
             const command = args.object.get("command").?.string;
-            self.server.spawn(command);
+            _ = self.server.spawn(command);
             _ = std.posix.write(fd, "{\"ok\":true}\n") catch {};
 
         } else if (std.mem.eql(u8, cmd, "focus_window")) {

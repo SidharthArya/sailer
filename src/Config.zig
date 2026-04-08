@@ -141,6 +141,7 @@ pub const Config = struct {
     repeat_rate: u32 = 25,
     repeat_delay: u32 = 600,
     focus_on_activation: bool = true,
+    spawn_once: []const []const u8 = &.{},
 
     pub fn load(allocator: std.mem.Allocator) !Config {
         const home = std.process.getEnvVarOwned(allocator, "HOME") catch return error.NoHome;
@@ -232,7 +233,8 @@ pub const Config = struct {
             \\    "refresh_interval": 10000
             \\  },
             \\  "focus_on_activation": false,
-            \\  "keybindings": []
+            \\  "keybindings": [],
+            \\  "spawn_once": []
             \\}
         ;
         const parsed = try std.json.parseFromSlice(Config, allocator, default_json, .{ .ignore_unknown_fields = true });
