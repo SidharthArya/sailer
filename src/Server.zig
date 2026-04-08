@@ -23,6 +23,7 @@ const Menu = @import("Menu.zig").Menu;
 const SessionLock = @import("SessionLock.zig").SessionLock;
 const Bar = @import("Bar.zig").Bar;
 const LayoutState = @import("LayoutState.zig");
+const WorkspaceProtocol = @import("WorkspaceProtocol.zig").WorkspaceProtocol;
 const c = @import("c.zig").c;
 
 pub const KeyMatch = struct {
@@ -114,6 +115,7 @@ pub const Server = struct {
     bar_height: i32 = 0,
     mcp: ?*McpServer = null,
     ipc: ?*IpcServer = null,
+    workspace_protocol: ?*WorkspaceProtocol = null,
     active_menu: ?*Menu = null,
     active_session_lock: ?*SessionLock = null,
     lid_closed: bool = false,
@@ -284,6 +286,10 @@ pub const Server = struct {
             ws.* = try Workspace.init(server, name);
         }
         server.focused_workspace = server.workspaces[0];
+        server.workspace_protocol = WorkspaceProtocol.init(server) catch |err| blk: {
+            std.log.err("failed to initialize workspace protocol: {}", .{err});
+            break :blk null;
+        };
 
         server.socket_name = try wl_server.addSocketAuto(&server.socket_name_buf);
         _ = c.setenv("WAYLAND_DISPLAY", server.socket_name.ptr, 1);
@@ -841,6 +847,9 @@ pub const Server = struct {
                         toplevel.urgent = true;
                         toplevel.refreshBorderColor(false);
                         server.refreshBars();
+                        if (server.workspace_protocol) |wp| {
+                            wp.notifyUrgent(toplevel.workspace);
+                        }
                     }
                 }
             }
@@ -1407,6 +1416,9 @@ pub const Server = struct {
             wlr.Seat.keyboardNotifyClearFocus(server.seat);
         }
         server.refreshBars();
+        if (server.workspace_protocol) |wp| {
+            wp.notifyActive(target_ws);
+        }
     }
 
     pub fn activateWorkspace(server: *Server, target_ws: *@import("Workspace.zig").Workspace) void {

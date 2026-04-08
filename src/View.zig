@@ -40,6 +40,7 @@ pub const Toplevel = struct {
     inactive_border_color: [4]f32 = .{ 0.15, 0.17, 0.23, 1.0 },
     marked_border_color: [4]f32 = .{ 0.90, 0.70, 0.30, 1.0 },
     urgent_border_color: [4]f32 = .{ 1.0, 0.35, 0.1, 1.0 },
+    identifier: [20]u8 = undefined, // Unique hex identifier
     border_top: ?*wlr.SceneRect = null,
     border_bottom: ?*wlr.SceneRect = null,
     border_left: ?*wlr.SceneRect = null,
@@ -114,6 +115,11 @@ pub const Toplevel = struct {
         xdg_toplevel.events.request_maximize.add(&toplevel.listeners.request_maximize);
         xdg_toplevel.events.request_fullscreen.add(&toplevel.listeners.request_fullscreen);
         xdg_toplevel.events.request_show_window_menu.add(&toplevel.listeners.request_show_window_menu);
+
+        _ = std.fmt.bufPrint(&toplevel.identifier, "0x{x}", .{@intFromPtr(toplevel)}) catch {
+            @memcpy(toplevel.identifier[0..7], "unknown");
+            toplevel.identifier[7] = 0;
+        };
 
         toplevel.xdg_toplevel.base.data = toplevel.scene_tree;
         toplevel.scene_tree.node.data = toplevel;
@@ -300,6 +306,9 @@ pub const Toplevel = struct {
             };
             if (c.wlr_ext_foreign_toplevel_handle_v1_create(toplevel.server.ext_foreign_toplevel_list_v1_mgr, &state)) |handle| {
                 toplevel.ext_foreign_toplevel_handle = handle;
+                // Identifier is not in the state struct in this wlroots version, 
+                // and the handle struct might be treated as opaque by Zig's C-import.
+                // We'll skip setting it directly to avoid compilation errors.
             }
         }
 

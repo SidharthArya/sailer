@@ -94,6 +94,7 @@ pub fn build(b: *std.Build) void {
     scanner.addSystemProtocol("staging/tearing-control/tearing-control-v1.xml");
     scanner.addSystemProtocol("staging/content-type/content-type-v1.xml");
     scanner.addSystemProtocol("staging/ext-image-copy-capture/ext-image-copy-capture-v1.xml");
+    scanner.addSystemProtocol("staging/ext-workspace/ext-workspace-v1.xml");
     scanner.addCustomProtocol(b.path("protocols/wlr-layer-shell-unstable-v1.xml"));
     scanner.addCustomProtocol(b.path("protocols/virtual-keyboard-unstable-v1.xml"));
 
@@ -108,6 +109,7 @@ pub fn build(b: *std.Build) void {
     scanner.generate("zwp_virtual_keyboard_manager_v1", 1);
     scanner.generate("ext_session_lock_manager_v1", 1);
     scanner.generate("ext_image_copy_capture_manager_v1", 1);
+    scanner.generate("ext_workspace_manager_v1", 1);
     scanner.generate("zwp_pointer_gestures_v1", 3);
     scanner.generate("zwp_pointer_constraints_v1", 1);
     scanner.generate("zxdg_decoration_manager_v1", 1);
@@ -175,6 +177,18 @@ pub fn build(b: *std.Build) void {
     mcp_exe.linkLibC();
     b.installArtifact(mcp_exe);
 
+    // sailer-msg: CLI client for the IPC socket
+    const msg_exe = b.addExecutable(.{
+        .name = "sailer-msg",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/msg_main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    msg_exe.linkLibC();
+    b.installArtifact(msg_exe);
+
     // This creates a top level step. Top level steps have a name and can be
     // invoked by name when running `zig build` (e.g. `zig build run`).
     // This will evaluate the `run` step rather than the default step.
@@ -221,12 +235,40 @@ pub fn build(b: *std.Build) void {
     // A run step that will run the second test executable.
     const run_exe_tests = b.addRunArtifact(exe_tests);
 
+    // Bug exploration tests — pure logic tests, no wlroots dependency
+    const bug_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/bug_exploration_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_bug_tests = b.addRunArtifact(bug_tests);
+
     // A top level step for running all tests. dependOn can be called multiple
     // times and since the two run steps do not depend on one another, this will
     // make the two of them run in parallel.
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
+
+    // Separate step for bug exploration tests only (no compositor deps needed)
+    const bug_test_step = b.step("test-bugs", "Run bug condition exploration tests");
+    bug_test_step.dependOn(&run_bug_tests.step);
+
+    // Preservation tests — pure logic tests, no wlroots dependency
+    const preservation_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/preservation_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_preservation_tests = b.addRunArtifact(preservation_tests);
+
+    // Separate step for preservation tests only
+    const preservation_test_step = b.step("test-preservation", "Run preservation property tests");
+    preservation_test_step.dependOn(&run_preservation_tests.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //
