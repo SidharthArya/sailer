@@ -70,6 +70,7 @@ pub const Server = struct {
     xdg_decoration: *wlr.XdgDecorationManagerV1,
     layer_shell: *wlr.LayerShellV1,
     foreign_toplevel_mgr: *wlr.ForeignToplevelManagerV1,
+    ext_foreign_toplevel_list_v1_mgr: *c.wlr_ext_foreign_toplevel_list_v1,
     session_lock_mgr: *wlr.SessionLockManagerV1,
     virtual_keyboard_mgr: *wlr.VirtualKeyboardManagerV1 = undefined,
 
@@ -265,6 +266,7 @@ pub const Server = struct {
         _ = try wlr.ExportDmabufManagerV1.create(server.wl_server);
         _ = try wlr.LinuxDmabufV1.createWithRenderer(server.wl_server, 4, server.renderer);
         server.foreign_toplevel_mgr = try wlr.ForeignToplevelManagerV1.create(server.wl_server);
+        server.ext_foreign_toplevel_list_v1_mgr = c.wlr_ext_foreign_toplevel_list_v1_create(@ptrCast(server.wl_server), 1).?;
         
         _ = try wlr.PrimarySelectionDeviceManagerV1.create(server.wl_server);
         _ = try wlr.FractionalScaleManagerV1.create(server.wl_server, 1);
@@ -830,8 +832,17 @@ pub const Server = struct {
 
         if (wlr.XdgSurface.tryFromWlrSurface(event.surface)) |xdg_surface| {
             if (View.fromXdgSurface(xdg_surface)) |toplevel| {
-                server.activateWorkspace(toplevel.workspace);
-                server.focusView(toplevel, event.surface);
+                if (server.config.focus_on_activation) {
+                    server.activateWorkspace(toplevel.workspace);
+                    server.focusView(toplevel, event.surface);
+                } else {
+                    // Mark as urgent if not already focused
+                    if (server.seat.keyboard_state.focused_surface != event.surface) {
+                        toplevel.urgent = true;
+                        toplevel.refreshBorderColor(false);
+                        server.refreshBars();
+                    }
+                }
             }
         }
     }
@@ -878,6 +889,7 @@ pub const Server = struct {
 
         server.focused_workspace = toplevel.workspace;
         toplevel.scene_tree.node.raiseToTop();
+        toplevel.urgent = false;
         toplevel.refreshBorderColor(true);
         
         toplevel.focus_link.remove();
@@ -1635,7 +1647,14 @@ pub const Server = struct {
                         t.refreshBorderColor(is_focused);
                     },
                     .toggle_hidden => t.hidden = !t.hidden,
-                    .toggle_urgent => t.urgent = !t.urgent,
+                    .toggle_urgent => {
+                        t.urgent = !t.urgent;
+                        const is_focused = if (t.server.seat.keyboard_state.focused_surface) |surf|
+                            surf == t.xdg_toplevel.base.surface
+                        else
+                            false;
+                        t.refreshBorderColor(is_focused);
+                    },
                     .close => t.close(),
                     .toggle_maximize => t.setMaximized(!t.is_maximized),
                     .toggle_fullscreen => t.setFullscreen(!t.is_fullscreen),

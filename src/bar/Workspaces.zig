@@ -27,6 +27,7 @@ pub const Workspaces = struct {
             };
             const is_globally_focused = (server.focused_workspace == ws);
             const has_views = (ws.views.link.next != &ws.views.link);
+            const is_urgent = ws.isUrgent();
 
             if (is_active_here) {
                 // Main highlight for workspace on THIS monitor (Mauve)
@@ -39,8 +40,12 @@ pub const Workspaces = struct {
                 }});
                 
                 // FORCE MAXIMUM CONTRAST: Use Base (Pitch Black) for focused, Blue for active-unfocused
-                const text_color = if (is_globally_focused) Theme.base else Theme.blue;
+                // If urgent, use Peach (Orange) for the text
+                const text_color = if (is_urgent) Theme.peach else if (is_globally_focused) Theme.base else Theme.blue;
                 bar.drawText(pixels, label, x_offset.* + 2, 17, text_color);
+            } else if (is_urgent) {
+                // Urgent workspace not active here (Peach)
+                bar.drawText(pixels, label, x_offset.* + 2, 17, Theme.peach);
             } else if (is_globally_focused) {
                 // Highlight text only for globally focused workspace on ANOTHER monitor
                 bar.drawText(pixels, label, x_offset.* + 2, 17, Theme.mauve);

@@ -151,6 +151,7 @@ const tools = [_]ToolDef{
     .{ .name = "toggle_private", .description = "Toggle private state on the focused window" },
     .{ .name = "toggle_marked", .description = "Toggle marked state on the focused window" },
     .{ .name = "toggle_urgent", .description = "Toggle urgent state on the focused window" },
+    .{ .name = "set_urgent", .description = "Set urgent state for a specific window by title or app_id", .has_args = true, .properties_json = "{\"title\":{\"type\":\"string\",\"description\":\"Window title (substring match)\"},\"app_id\":{\"type\":\"string\",\"description\":\"Application ID (substring match)\"},\"urgent\":{\"type\":\"boolean\",\"description\":\"Urgency state (default: true)\"}}" },
     // Workspace
     .{ .name = "switch_workspace", .description = "Switch to a workspace by index (1-10)", .has_args = true, .properties_json = "{\"index\":{\"type\":\"integer\",\"description\":\"Workspace index (1-10)\"}}", .required_json = "[\"index\"]" },
     .{ .name = "move_to_workspace", .description = "Move the focused window to a specific workspace by index (1-10)", .has_args = true, .properties_json = "{\"index\":{\"type\":\"integer\",\"description\":\"Workspace index (1-10)\"}}", .required_json = "[\"index\"]" },
@@ -315,6 +316,26 @@ fn processMessage(socket_path: []const u8, body: []const u8, stdout_fd: std.posi
                 try escaped.append(gpa, ch);
             }
             try ipc_req.writer(gpa).print("{{\"cmd\":\"type_text\",\"args\":{{\"text\":\"{s}\"}}}}", .{escaped.items});
+        } else if (std.mem.eql(u8, tool_name, "set_urgent")) {
+            const title = args.object.get("title");
+            const app_id = args.object.get("app_id");
+            const urgent = args.object.get("urgent") orelse std.json.Value{ .bool = true };
+            
+            try ipc_req.writer(gpa).print("{{\"cmd\":\"set_urgent\",\"args\":{{", .{});
+            var first = true;
+            if (title) |t| {
+                if (!first) try ipc_req.appendSlice(gpa, ",");
+                try ipc_req.writer(gpa).print("\"title\":\"{s}\"", .{t.string});
+                first = false;
+            }
+            if (app_id) |a| {
+                if (!first) try ipc_req.appendSlice(gpa, ",");
+                try ipc_req.writer(gpa).print("\"app_id\":\"{s}\"", .{a.string});
+                first = false;
+            }
+            if (!first) try ipc_req.appendSlice(gpa, ",");
+            try ipc_req.writer(gpa).print("\"urgent\":{}", .{urgent.bool});
+            try ipc_req.appendSlice(gpa, "}}}");
         } else if (std.mem.eql(u8, tool_name, "set_display_mode")) {
             const mode = (args.object.get("mode") orelse {
                 try sendError(stdout_fd, id, "missing mode");

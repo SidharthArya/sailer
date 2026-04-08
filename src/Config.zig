@@ -140,6 +140,7 @@ pub const Config = struct {
     bar: BarConfig = .{},
     repeat_rate: u32 = 25,
     repeat_delay: u32 = 600,
+    focus_on_activation: bool = true,
 
     pub fn load(allocator: std.mem.Allocator) !Config {
         const home = std.process.getEnvVarOwned(allocator, "HOME") catch return error.NoHome;
@@ -172,28 +173,24 @@ pub const Config = struct {
         if (content) |c| {
             defer allocator.free(c);
             std.log.info("Loading config from: {s}", .{found_path.?});
-            
+
             var json_str: []u8 = c;
             var child: ?std.process.Child = null;
-            
+
             if (std.mem.endsWith(u8, found_path.?, ".yaml") or std.mem.endsWith(u8, found_path.?, ".yml")) {
                 // TODO: Replace the python3 yaml->json subprocess with a native Zig YAML parser
                 //       (e.g. the bundled ymlz dependency) to remove the python3 runtime requirement.
-                const py_cmd = [_][]const u8{
-                    "python3",
-                    "-c",
-                    "import yaml, json, sys; print(json.dumps(yaml.safe_load(sys.stdin.read())))"
-                };
+                const py_cmd = [_][]const u8{ "python3", "-c", "import yaml, json, sys; print(json.dumps(yaml.safe_load(sys.stdin.read())))" };
                 child = std.process.Child.init(&py_cmd, allocator);
                 child.?.stdin_behavior = .Pipe;
                 child.?.stdout_behavior = .Pipe;
                 child.?.stderr_behavior = .Ignore;
-                
+
                 try child.?.spawn();
                 try child.?.stdin.?.writeAll(c);
                 child.?.stdin.?.close();
                 child.?.stdin = null;
-                
+
                 json_str = try child.?.stdout.?.readToEndAlloc(allocator, 1024 * 1024);
             }
             defer {
@@ -203,7 +200,7 @@ pub const Config = struct {
             }
 
             allocator.free(found_path.?);
-            
+
             const parsed = std.json.parseFromSlice(Config, allocator, json_str, .{ .ignore_unknown_fields = true }) catch |err| {
                 std.log.err("Failed to parse config: {}", .{err});
                 return try default(allocator);
@@ -219,7 +216,7 @@ pub const Config = struct {
     pub fn default(allocator: std.mem.Allocator) !Config {
         // TODO: The default config embeds no keybindings, making the compositor unusable out of the box.
         //       Add a sensible set of default keybindings (e.g. Super+Return for terminal, Super+Q to close).
-        const default_json = 
+        const default_json =
             \\{
             \\  "font": "/usr/share/fonts/TTF/DejaVuSans.ttf",
             \\  "split_ratio": 0.5,
@@ -234,6 +231,7 @@ pub const Config = struct {
             \\    "font_size": 11,
             \\    "refresh_interval": 10000
             \\  },
+            \\  "focus_on_activation": false,
             \\  "keybindings": []
             \\}
         ;
@@ -241,4 +239,3 @@ pub const Config = struct {
         return parsed.value;
     }
 };
-

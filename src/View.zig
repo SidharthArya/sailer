@@ -2,6 +2,7 @@ const std = @import("std");
 const wl = @import("wayland").server.wl;
 const wlr = @import("wlroots");
 const Server = @import("Server.zig").Server;
+const c = @import("c.zig").c;
 
 pub const Toplevel = struct {
     server: *Server,
@@ -13,6 +14,7 @@ pub const Toplevel = struct {
     scene_tree: *wlr.SceneTree,
     xdg_surface_tree: *wlr.SceneTree,
     foreign_toplevel: ?*wlr.ForeignToplevelHandleV1 = null,
+    ext_foreign_toplevel_handle: ?*c.wlr_ext_foreign_toplevel_handle_v1 = null,
     last_output: ?*wlr.Output = null,
 
     x: i32 = 0,
@@ -37,6 +39,7 @@ pub const Toplevel = struct {
     active_border_color: [4]f32 = .{ 0.38, 0.44, 0.60, 1.0 },
     inactive_border_color: [4]f32 = .{ 0.15, 0.17, 0.23, 1.0 },
     marked_border_color: [4]f32 = .{ 0.90, 0.70, 0.30, 1.0 },
+    urgent_border_color: [4]f32 = .{ 1.0, 0.35, 0.1, 1.0 },
     border_top: ?*wlr.SceneRect = null,
     border_bottom: ?*wlr.SceneRect = null,
     border_left: ?*wlr.SceneRect = null,
@@ -74,6 +77,7 @@ pub const Toplevel = struct {
             .active_border_color = .{ 0.38, 0.44, 0.60, 1.0 },
             .inactive_border_color = .{ 0.15, 0.17, 0.23, 1.0 },
             .marked_border_color = .{ 0.90, 0.70, 0.30, 1.0 },
+            .urgent_border_color = .{ 1.0, 0.35, 0.1, 1.0 },
         };
 
         const scene_tree = workspace.scene_tree.createSceneTree() catch return error.SceneTreeCreationFailed;
@@ -129,6 +133,8 @@ pub const Toplevel = struct {
             self.marked_border_color
         else if (focused)
             self.active_border_color
+        else if (self.urgent)
+            self.urgent_border_color
         else
             self.inactive_border_color;
 
@@ -203,12 +209,26 @@ pub const Toplevel = struct {
                 if (toplevel.last_output != output.wlr_output) {
                     if (toplevel.last_output) |lo| handle.outputLeave(lo);
                     handle.outputEnter(output.wlr_output);
-                    toplevel.last_output = output.wlr_output;
                 }
             } else if (toplevel.last_output) |lo| {
                 handle.outputLeave(lo);
-                toplevel.last_output = null;
             }
+        }
+
+        if (toplevel.ext_foreign_toplevel_handle) |handle| {
+            const state = c.wlr_ext_foreign_toplevel_handle_v1_state{
+                .title = if (toplevel.xdg_toplevel.title) |title| title else null,
+                .app_id = if (toplevel.xdg_toplevel.app_id) |app_id| app_id else null,
+            };
+            c.wlr_ext_foreign_toplevel_handle_v1_update_state(handle, &state);
+        }
+
+        if (toplevel.workspace.visible_on) |output| {
+            if (toplevel.last_output != output.wlr_output) {
+                toplevel.last_output = output.wlr_output;
+            }
+        } else {
+            toplevel.last_output = null;
         }
     }
 
@@ -273,6 +293,16 @@ pub const Toplevel = struct {
             }
         }
 
+        if (toplevel.ext_foreign_toplevel_handle == null) {
+            const state = c.wlr_ext_foreign_toplevel_handle_v1_state{
+                .title = if (toplevel.xdg_toplevel.title) |title| title else null,
+                .app_id = if (toplevel.xdg_toplevel.app_id) |app_id| app_id else null,
+            };
+            if (c.wlr_ext_foreign_toplevel_handle_v1_create(toplevel.server.ext_foreign_toplevel_list_v1_mgr, &state)) |handle| {
+                toplevel.ext_foreign_toplevel_handle = handle;
+            }
+        }
+
         toplevel.workspace.arrange();
         toplevel.server.focusView(toplevel, toplevel.xdg_toplevel.base.surface);
     }
@@ -289,7 +319,7 @@ pub const Toplevel = struct {
         const ws = toplevel.workspace;
         const server = toplevel.server;
         const was_focused = if (server.seat.keyboard_state.focused_surface) |surface| surface == toplevel.xdg_toplevel.base.surface else false;
-        
+
         var next_focus: ?*Toplevel = null;
         if (was_focused) {
             switch (server.config.focus_on_close) {
@@ -305,13 +335,12 @@ pub const Toplevel = struct {
                     while (it != &ws.focus_history.link) : (it = it.?.next) {
                         const candidate: *Toplevel = @fieldParentPtr("focus_link", it.?);
 
-
                         if (candidate != toplevel) {
                             next_focus = candidate;
                             break;
                         }
                     }
-                }
+                },
             }
         }
 
@@ -339,6 +368,10 @@ pub const Toplevel = struct {
 
         if (toplevel.foreign_toplevel) |_| {
             toplevel.detachForeignToplevel();
+        }
+        if (toplevel.ext_foreign_toplevel_handle) |handle| {
+            c.wlr_ext_foreign_toplevel_handle_v1_destroy(handle);
+            toplevel.ext_foreign_toplevel_handle = null;
         }
     }
 
@@ -425,7 +458,7 @@ pub const Toplevel = struct {
 
     pub fn setMaximized(self: *Toplevel, requested: bool) void {
         if (self.is_maximized == requested) return;
-        
+
         if (requested) {
             self.saved_x = self.x;
             self.saved_y = self.y;
@@ -435,7 +468,7 @@ pub const Toplevel = struct {
             self.y = self.saved_y;
             self.width_percent = self.saved_width_percent;
         }
-        
+
         self.is_maximized = requested;
         _ = self.xdg_toplevel.setMaximized(requested);
         self.workspace.arrange();

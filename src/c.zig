@@ -11,6 +11,7 @@ pub const c = @cImport({
     @cInclude("wlr/render/wlr_renderer.h");
     @cInclude("wlr/util/box.h");
     @cInclude("wlr/types/wlr_damage_ring.h");
+    @cInclude("wlr/types/wlr_ext_foreign_toplevel_list_v1.h");
     @cInclude("xkbcommon/xkbcommon.h");
     @cInclude("wayland-server-core.h");
     @cInclude("drm_fourcc.h");

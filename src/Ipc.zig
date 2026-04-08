@@ -81,7 +81,7 @@ pub const IpcServer = struct {
     fn isKnownMutatingCommand(cmd: []const u8) bool {
         if (isSimpleAction(cmd)) return true;
         const arg_commands = [_][]const u8{
-            "spawn", "focus_window", "switch_workspace", "move_to_workspace", "type_text", "set_display_mode",
+            "spawn", "focus_window", "set_urgent", "switch_workspace", "move_to_workspace", "type_text", "set_display_mode",
         };
         for (arg_commands) |c| {
             if (std.mem.eql(u8, cmd, c)) return true;
@@ -351,6 +351,50 @@ pub const IpcServer = struct {
                     const window_title = std.mem.span(view.xdg_toplevel.title orelse "");
                     if (std.mem.indexOf(u8, window_title, title) != null) {
                         self.server.focusView(view, view.xdg_toplevel.base.surface);
+                        found = true;
+                        break :outer;
+                    }
+                }
+            }
+            if (found) {
+                _ = std.posix.write(fd, "{\"ok\":true}\n") catch {};
+            } else {
+                _ = std.posix.write(fd, "{\"ok\":false,\"error\":\"window not found\"}\n") catch {};
+            }
+
+        } else if (std.mem.eql(u8, cmd, "set_urgent")) {
+            const title = args.object.get("title");
+            const app_id = args.object.get("app_id");
+            const urgent_val = args.object.get("urgent") orelse std.json.Value{ .bool = true };
+            const is_urgent = switch (urgent_val) {
+                .bool => |b| b,
+                .string => |s| std.mem.eql(u8, s, "true"),
+                else => true,
+            };
+
+            const View = @import("View.zig");
+            var found = false;
+            outer: for (self.server.workspaces) |ws| {
+                var it = ws.views.link.next;
+                while (it != &ws.views.link) : (it = it.?.next) {
+                    const view: *View.Toplevel = @fieldParentPtr("link", it.?);
+                    var match = false;
+                    if (title) |t| {
+                        const window_title = std.mem.span(view.xdg_toplevel.title orelse "");
+                        if (std.mem.indexOf(u8, window_title, t.string) != null) match = true;
+                    }
+                    if (app_id) |a| {
+                        const window_app_id = std.mem.span(view.xdg_toplevel.app_id orelse "");
+                        if (std.mem.indexOf(u8, window_app_id, a.string) != null) match = true;
+                    }
+                    
+                    if (match) {
+                        view.urgent = is_urgent;
+                        const is_focused = if (self.server.seat.keyboard_state.focused_surface) |surf|
+                            surf == view.xdg_toplevel.base.surface
+                        else
+                            false;
+                        view.refreshBorderColor(is_focused);
                         found = true;
                         break :outer;
                     }

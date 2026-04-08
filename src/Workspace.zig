@@ -270,6 +270,15 @@ pub const Workspace = struct {
         }
     }
 
+    pub fn isUrgent(self: *Workspace) bool {
+        var it = self.views.link.next;
+        while (it != &self.views.link) : (it = it.?.next) {
+            const view: *View.Toplevel = @fieldParentPtr("link", it.?);
+            if (view.mapped and view.urgent) return true;
+        }
+        return false;
+    }
+
     pub fn deinit(self: *Workspace) void {
         std.heap.c_allocator.free(self.name);
         std.heap.c_allocator.destroy(self);

@@ -7,4 +7,5 @@ pub const Theme = struct {
     pub const subtext = c.pixman_color_t{ .red = 0xa6a6, .green = 0xadad, .blue = 0xc8c8, .alpha = 0xffff };
     pub const crust = c.pixman_color_t{ .red = 0x1111, .green = 0x1111, .blue = 0x1b1b, .alpha = 0xffff };
     pub const base = c.pixman_color_t{ .red = 0x1e1e, .green = 0x1e1e, .blue = 0x2e2e, .alpha = 0xffff };
+    pub const peach = c.pixman_color_t{ .red = 0xffff, .green = 0x5999, .blue = 0x1999, .alpha = 0xffff };
 };
