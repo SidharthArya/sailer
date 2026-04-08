@@ -151,6 +151,16 @@ pub const Toplevel = struct {
         }
 
         if (toplevel.mapped) {
+            // For scratchpad (floating) windows, arrange() skips updateLayout.
+            // Update borders directly using the committed geometry so they wrap
+            // the actual window size rather than the 800×600 fallback from handleMap.
+            if (toplevel.scratchpad_id != 0) {
+                const geo = toplevel.xdg_toplevel.base.geometry;
+                if (geo.width > 0 and geo.height > 0) {
+                    const bw = toplevel.border_width;
+                    toplevel.updateLayout(geo.width + 2 * bw, geo.height + 2 * bw);
+                }
+            }
             toplevel.workspace.arrange();
         }
 
@@ -201,6 +211,15 @@ pub const Toplevel = struct {
         if (toplevel.border_bottom) |r| r.node.raiseToTop();
         if (toplevel.border_left) |r| r.node.raiseToTop();
         if (toplevel.border_right) |r| r.node.raiseToTop();
+
+        // Size border rects before the first frame for scratchpad windows.
+        // The layout's arrange() skips updateLayout for floating windows, so
+        // border rects would remain 0×0 until the first handleCommit fires.
+        if (toplevel.scratchpad_id != 0) {
+            const w = if (toplevel.xdg_toplevel.current.width > 0) toplevel.xdg_toplevel.current.width else 800;
+            const h = if (toplevel.xdg_toplevel.current.height > 0) toplevel.xdg_toplevel.current.height else 600;
+            toplevel.updateLayout(w, h);
+        }
 
         // Create foreign toplevel handle
         if (toplevel.foreign_toplevel == null) {
