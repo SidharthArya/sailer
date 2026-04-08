@@ -35,6 +35,7 @@ pub const Toplevel = struct {
     border_width: i32 = 2,
     active_border_color: [4]f32 = .{ 0.38, 0.44, 0.60, 1.0 },
     inactive_border_color: [4]f32 = .{ 0.15, 0.17, 0.23, 1.0 },
+    marked_border_color: [4]f32 = .{ 0.90, 0.70, 0.30, 1.0 },
     border_top: ?*wlr.SceneRect = null,
     border_bottom: ?*wlr.SceneRect = null,
     border_left: ?*wlr.SceneRect = null,
@@ -69,6 +70,9 @@ pub const Toplevel = struct {
             .xdg_surface_tree = undefined,
             .listeners = undefined,
             .border_width = 2,
+            .active_border_color = .{ 0.38, 0.44, 0.60, 1.0 },
+            .inactive_border_color = .{ 0.15, 0.17, 0.23, 1.0 },
+            .marked_border_color = .{ 0.90, 0.70, 0.30, 1.0 },
         };
 
         const scene_tree = workspace.scene_tree.createSceneTree() catch return error.SceneTreeCreationFailed;
@@ -112,11 +116,22 @@ pub const Toplevel = struct {
         return toplevel;
     }
 
-    pub fn updateBorderColor(self: *Toplevel, color: *const [4]f32) void {
-        if (self.border_top) |r| r.setColor(color);
-        if (self.border_bottom) |r| r.setColor(color);
-        if (self.border_left) |r| r.setColor(color);
-        if (self.border_right) |r| r.setColor(color);
+    pub fn updateBorderColor(self: *Toplevel, color: [4]f32) void {
+        if (self.border_top) |r| r.setColor(&color);
+        if (self.border_bottom) |r| r.setColor(&color);
+        if (self.border_left) |r| r.setColor(&color);
+        if (self.border_right) |r| r.setColor(&color);
+    }
+
+    pub fn refreshBorderColor(self: *Toplevel, focused: bool) void {
+        const color = if (self.marked)
+            self.marked_border_color
+        else if (focused)
+            self.active_border_color
+        else
+            self.inactive_border_color;
+
+        self.updateBorderColor(color);
     }
 
     pub fn updateLayout(self: *Toplevel, width: i32, height: i32) void {
@@ -220,7 +235,7 @@ pub const Toplevel = struct {
             }
         }
         toplevel.mapped = true;
-        toplevel.updateBorderColor(&toplevel.inactive_border_color);
+        toplevel.refreshBorderColor(false);
         if (toplevel.border_top) |r| r.node.raiseToTop();
         if (toplevel.border_bottom) |r| r.node.raiseToTop();
         if (toplevel.border_left) |r| r.node.raiseToTop();

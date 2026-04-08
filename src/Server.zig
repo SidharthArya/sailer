@@ -848,7 +848,7 @@ pub const Server = struct {
                 if (xdg_surface.role_data.toplevel) |prev_t_wlr| {
                     _ = wlr.XdgToplevel.setActivated(prev_t_wlr, false);
                     if (View.fromXdgSurface(xdg_surface)) |prev_t| {
-                        prev_t.updateBorderColor(&prev_t.inactive_border_color);
+                        prev_t.refreshBorderColor(false);
                         if (prev_t.foreign_toplevel) |handle| {
                             handle.setActivated(false);
                         }
@@ -859,7 +859,7 @@ pub const Server = struct {
 
         server.focused_workspace = toplevel.workspace;
         toplevel.scene_tree.node.raiseToTop();
-        toplevel.updateBorderColor(&toplevel.active_border_color);
+        toplevel.refreshBorderColor(true);
         
         toplevel.focus_link.remove();
         toplevel.workspace.focus_history.prepend(toplevel);
@@ -1562,7 +1562,14 @@ pub const Server = struct {
                     .toggle_locked => t.locked = !t.locked,
                     .toggle_sticky => t.sticky = !t.sticky,
                     .toggle_private => t.private = !t.private,
-                    .toggle_marked => t.marked = !t.marked,
+                    .toggle_marked => {
+                        t.marked = !t.marked;
+                        const is_focused = if (t.server.seat.keyboard_state.focused_surface) |surf|
+                            surf == t.xdg_toplevel.base.surface
+                        else
+                            false;
+                        t.refreshBorderColor(is_focused);
+                    },
                     .toggle_hidden => t.hidden = !t.hidden,
                     .toggle_urgent => t.urgent = !t.urgent,
                     .close => t.close(),
@@ -1728,6 +1735,11 @@ pub const Server = struct {
                                 if (kb.action) |action| {
                                     server.executeAction(action, kb, null);
                                 }
+                                if (kb.actions) |actions| {
+                                    for (actions) |action| {
+                                        server.executeAction(action, kb, null);
+                                    }
+                                }
                                 full_match = true;
                                 break;
                             } else {
@@ -1740,6 +1752,11 @@ pub const Server = struct {
                         std.log.debug("Single keybind match found!", .{});
                         if (kb.action) |action| {
                             server.executeAction(action, kb, null);
+                        }
+                        if (kb.actions) |actions| {
+                            for (actions) |action| {
+                                server.executeAction(action, kb, null);
+                            }
                         }
                         any_match = true;
                         full_match = true;
