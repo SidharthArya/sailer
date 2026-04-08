@@ -134,6 +134,7 @@ pub const Server = struct {
         cursor_frame: wl.Listener(*wlr.Cursor),
         new_session_lock: wl.Listener(*wlr.SessionLockV1),
         new_virtual_keyboard: wl.Listener(*wlr.VirtualKeyboardV1),
+        request_activate: wl.Listener(*wlr.XdgActivationV1.event.RequestActivate),
     };
 
 
@@ -154,6 +155,7 @@ pub const Server = struct {
         server.listeners.cursor_frame = .init(Server.cursorFrame);
         server.listeners.new_session_lock = .init(Server.newSessionLock);
         server.listeners.new_virtual_keyboard = .init(Server.newVirtualKeyboard);
+        server.listeners.request_activate = .init(Server.requestActivate);
 
         server.keyboards.init();
         server.outputs.init();
@@ -213,6 +215,7 @@ pub const Server = struct {
         server.session_lock_mgr.events.new_lock.add(&server.listeners.new_session_lock);
 
         server.xdg_activation = try wlr.XdgActivationV1.create(wl_server);
+        server.xdg_activation.events.request_activate.add(&server.listeners.request_activate);
         server.xdg_decoration = try wlr.XdgDecorationManagerV1.create(wl_server);
         server.cursor = try wlr.Cursor.create();
         server.cursor.attachOutputLayout(server.output_layout);
@@ -670,6 +673,7 @@ pub const Server = struct {
         server.listeners.cursor_axis.link.remove();
         server.listeners.cursor_frame.link.remove();
         server.listeners.new_layer_surface.link.remove();
+        server.listeners.request_activate.link.remove();
 
         server.bar_timer.remove();
         server.sigchld_source.remove();
@@ -818,6 +822,18 @@ pub const Server = struct {
         KeyboardDevice.create(server, device) catch |err| {
             std.log.err("Failed to create keyboard for virtual device: {}", .{err});
         };
+    }
+
+    fn requestActivate(listener: *wl.Listener(*wlr.XdgActivationV1.event.RequestActivate), event: *wlr.XdgActivationV1.event.RequestActivate) void {
+        const listeners: *Server.Listeners = @fieldParentPtr("request_activate", listener);
+        const server: *Server = @fieldParentPtr("listeners", listeners);
+
+        if (wlr.XdgSurface.tryFromWlrSurface(event.surface)) |xdg_surface| {
+            if (View.fromXdgSurface(xdg_surface)) |toplevel| {
+                server.activateWorkspace(toplevel.workspace);
+                server.focusView(toplevel, event.surface);
+            }
+        }
     }
 
     fn newSessionLock(listener: *wl.Listener(*wlr.SessionLockV1), wlr_lock: *wlr.SessionLockV1) void {
