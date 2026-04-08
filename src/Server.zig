@@ -115,6 +115,7 @@ pub const Server = struct {
     ipc: ?*IpcServer = null,
     active_menu: ?*Menu = null,
     active_session_lock: ?*SessionLock = null,
+    lid_closed: bool = false,
     listeners: Listeners,
 
     pub const Listeners = extern struct {
@@ -518,6 +519,15 @@ pub const Server = struct {
         while (it != &server.outputs.link) : (it = it.?.next) {
             const output: *Output = @fieldParentPtr("link", it.?);
 
+            // Skip disabled outputs (e.g. laptop panel when lid is closed)
+            if (!output.wlr_output.enabled) {
+                // Make sure no workspace is assigned to a disabled output
+                for (server.workspaces) |ws| {
+                    if (ws.visible_on == output) ws.visible_on = null;
+                }
+                continue;
+            }
+
             // Re-add to layout (required after TTY resume)
             switch (server.display_mode) {
                 .discrete, .spanned => {
@@ -678,14 +688,22 @@ pub const Server = struct {
 
         if (!wlr_output.initRender(server.allocator, server.renderer)) return;
 
+        // If the lid is closed and this is the laptop panel, disable it immediately
+        const is_laptop = std.mem.startsWith(u8, std.mem.span(wlr_output.name), "eDP");
+        const should_enable = !(is_laptop and server.lid_closed);
+
         var state = wlr.Output.State.init();
         defer state.finish();
 
-        state.setEnabled(true);
+        state.setEnabled(should_enable);
         if (wlr_output.preferredMode()) |mode| {
             state.setMode(mode);
         }
         if (!wlr_output.commitState(&state)) return;
+
+        if (!should_enable) {
+            std.log.info("Laptop output {s} disabled (lid closed)", .{wlr_output.name});
+        }
 
         const output_ptr = Output.create(server, wlr_output) catch {
             wlr_output.destroy();
@@ -701,7 +719,7 @@ pub const Server = struct {
 
         server.updateLayout();
 
-        if (server.display_mode == .discrete) {
+        if (server.display_mode == .discrete and should_enable) {
             // Assign this output to the first hidden workspace
             for (server.workspaces) |ws| {
                 if (ws.visible_on == null) {
@@ -928,6 +946,13 @@ pub const Server = struct {
                 server.device_map.put(std.heap.c_allocator, device, {}) catch {};
                 std.log.info("New pointer device {*}: {s}", .{ device, name });
                 wlr.Cursor.attachInputDevice(server.cursor, device);
+            },
+            .@"switch" => {
+                server.device_map.put(std.heap.c_allocator, device, {}) catch {};
+                std.log.info("New switch device {*}: {s}", .{ device, name });
+                _ = LidSwitchHandler.create(server, device.toSwitch()) catch |err| {
+                    std.log.err("failed to create lid switch handler: {}", .{err});
+                };
             },
             else => {
                 std.log.info("New input device {*}: {s} (type={}) - UNHANDLED", .{ device, name, device.type });
@@ -1720,5 +1745,89 @@ pub const Server = struct {
             return;
         };
         std.log.info("Screenshot saved to {s}", .{filename});
+    }
+};
+
+/// Handles lid switch toggle events from libinput via wlroots.
+/// When the lid closes and an external monitor is connected, the laptop panel
+/// (identified by an "eDP" output name) is disabled. When reopened, it's re-enabled.
+pub const LidSwitchHandler = struct {
+    server: *Server,
+    toggle_listener: wl.Listener(*wlr.Switch.event.Toggle),
+
+    pub fn create(server: *Server, wlr_switch: *wlr.Switch) !*LidSwitchHandler {
+        const handler = try std.heap.c_allocator.create(LidSwitchHandler);
+        handler.server = server;
+        handler.toggle_listener = .init(handleToggle);
+        wlr_switch.events.toggle.add(&handler.toggle_listener);
+        std.log.info("Lid switch handler created", .{});
+        return handler;
+    }
+
+    fn handleToggle(listener: *wl.Listener(*wlr.Switch.event.Toggle), event: *wlr.Switch.event.Toggle) void {
+        const handler: *LidSwitchHandler = @fieldParentPtr("toggle_listener", listener);
+        const server = handler.server;
+
+        // Only care about lid switches, not tablet mode
+        if (event.switch_type != .lid) return;
+
+        const lid_closed = (event.switch_state == .on);
+        server.lid_closed = lid_closed;
+        std.log.info("Lid switch: {s}", .{if (lid_closed) "closed" else "opened"});
+
+        // Count external (non-laptop) outputs
+        var external_count: u32 = 0;
+        var it = server.outputs.link.next;
+        while (it != &server.outputs.link) : (it = it.?.next) {
+            const output: *Output = @fieldParentPtr("link", it.?);
+            if (!std.mem.startsWith(u8, std.mem.span(output.wlr_output.name), "eDP")) {
+                external_count += 1;
+            }
+        }
+
+        // Find the laptop output
+        it = server.outputs.link.next;
+        while (it != &server.outputs.link) : (it = it.?.next) {
+            const output: *Output = @fieldParentPtr("link", it.?);
+            if (std.mem.startsWith(u8, std.mem.span(output.wlr_output.name), "eDP")) {
+                if (lid_closed and external_count > 0) {
+                    // Disable the laptop panel
+                    var state = wlr.Output.State.init();
+                    defer state.finish();
+                    state.setEnabled(false);
+                    if (output.wlr_output.commitState(&state)) {
+                        // Remove from output layout so cursor can't navigate here
+                        server.output_layout.remove(output.wlr_output);
+                        // Unassign any workspace from this output
+                        for (server.workspaces) |ws| {
+                            if (ws.visible_on == output) {
+                                ws.visible_on = null;
+                            }
+                        }
+                        std.log.info("Laptop output {s} disabled (lid closed, {d} external monitor(s))", .{ output.wlr_output.name, external_count });
+                    } else {
+                        std.log.err("Failed to disable laptop output {s}", .{output.wlr_output.name});
+                    }
+                } else if (!lid_closed) {
+                    // Re-enable the laptop panel
+                    var state = wlr.Output.State.init();
+                    defer state.finish();
+                    state.setEnabled(true);
+                    if (output.wlr_output.preferredMode()) |mode| {
+                        state.setMode(mode);
+                    }
+                    if (output.wlr_output.commitState(&state)) {
+                        // Re-add to output layout
+                        _ = server.output_layout.addAuto(output.wlr_output) catch {};
+                        std.log.info("Laptop output {s} re-enabled (lid opened)", .{output.wlr_output.name});
+                    } else {
+                        std.log.err("Failed to re-enable laptop output {s}", .{output.wlr_output.name});
+                    }
+                }
+                break;
+            }
+        }
+
+        server.updateLayout();
     }
 };
