@@ -1575,23 +1575,30 @@ pub const Server = struct {
                     });
 
                     if (t.workspace != current_ws) {
+                        // Moving from another workspace — always show it
                         std.log.debug("toggle_scratchpad: moving to current workspace '{s}'", .{ current_ws.name });
+                        t.workspace.arrange(); // re-arrange the old workspace
                         t.link.remove();
-                        current_ws.views.append(t);
+                        t.focus_link.remove();
+                        current_ws.views.prepend(t);
+                        current_ws.focus_history.prepend(t);
                         t.workspace = current_ws;
                         t.scene_tree.node.reparent(current_ws.scene_tree);
-                    }
-
-                    t.hidden = !t.hidden;
-                    std.log.debug("toggle_scratchpad: toggled hidden to: {}", .{ t.hidden });
-
-                    if (!t.hidden) {
+                        t.hidden = false;
                         server.focusView(t, t.xdg_toplevel.base.surface);
                     } else {
-                        // If we just hid the focused window, clear focus
-                        if (server.seat.keyboard_state.focused_surface == t.xdg_toplevel.base.surface) {
-                            std.log.debug("toggle_scratchpad: clearing focus from hidden scratchpad", .{});
-                            wlr.Seat.keyboardNotifyClearFocus(server.seat);
+                        // Already on current workspace — toggle visibility
+                        t.hidden = !t.hidden;
+                        std.log.debug("toggle_scratchpad: toggled hidden to: {}", .{ t.hidden });
+
+                        if (!t.hidden) {
+                            server.focusView(t, t.xdg_toplevel.base.surface);
+                        } else {
+                            // If we just hid the focused window, clear focus
+                            if (server.seat.keyboard_state.focused_surface == t.xdg_toplevel.base.surface) {
+                                std.log.debug("toggle_scratchpad: clearing focus from hidden scratchpad", .{});
+                                wlr.Seat.keyboardNotifyClearFocus(server.seat);
+                            }
                         }
                     }
                     current_ws.arrange();
