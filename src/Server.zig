@@ -79,7 +79,7 @@ pub const Server = struct {
     seat: *wlr.Seat,
     keyboards: wl.list.Head(KeyboardDevice, .link) = undefined,
     outputs: wl.list.Head(@import("Output.zig").Output, .link) = undefined,
-    toplevels: wl.list.Head(View.Toplevel, .link) = undefined,
+    toplevels: wl.list.Head(View.Toplevel, .all_link) = undefined,
     layer_surfaces: wl.list.Head(LayerSurface, .link) = undefined,
 
     cursor: *wlr.Cursor,
@@ -116,6 +116,7 @@ pub const Server = struct {
     active_menu: ?*Menu = null,
     active_session_lock: ?*SessionLock = null,
     lid_closed: bool = false,
+    marked_mode: bool = false,
     listeners: Listeners,
 
     pub const Listeners = extern struct {
@@ -175,6 +176,7 @@ pub const Server = struct {
         server.active_menu = null;
         server.active_session_lock = null;
         server.device_map = .{};
+        server.marked_mode = false;
 
         server.keyboards.init();
         server.outputs.init();
@@ -756,6 +758,7 @@ pub const Server = struct {
         // Add to workspace list immediately so link is valid for remove() later
         ws.views.prepend(toplevel);
         ws.focus_history.prepend(toplevel);
+        server.toplevels.prepend(toplevel);
 
         ws.arrange();
     }
@@ -1388,6 +1391,47 @@ pub const Server = struct {
     }
 
     pub fn executeAction(server: *Server, action: Action, kb: Keybinding, target: ?*Toplevel) void {
+        const broadcastable = switch (action) {
+            .resize_shrink, .resize_expand,
+            .move_left, .move_right, .move_up, .move_down,
+            .reorder_left, .reorder_right,
+            .move_workspace, .close,
+            .toggle_locked, .toggle_sticky, .toggle_private,
+            .toggle_marked, .toggle_hidden, .toggle_urgent,
+            .toggle_maximize, .toggle_fullscreen, .toggle_floating,
+            => true,
+            else => false,
+        };
+
+        if (server.marked_mode and broadcastable) {
+            var any_marked = false;
+            var it = server.toplevels.link.next;
+            while (it != &server.toplevels.link) : (it = it.?.next) {
+                const t: *Toplevel = @fieldParentPtr("all_link", it.?);
+                if (t.marked) {
+                    any_marked = true;
+                    break;
+                }
+            }
+
+            if (any_marked) {
+                var hit = server.toplevels.link.next;
+                while (hit != &server.toplevels.link) {
+                    const next = hit.?.next;
+                    const t: *Toplevel = @fieldParentPtr("all_link", hit.?);
+                    if (t.marked) {
+                        server.executeActionInternal(action, kb, t);
+                    }
+                    hit = next;
+                }
+                return;
+            }
+        }
+
+        server.executeActionInternal(action, kb, target);
+    }
+
+    fn executeActionInternal(server: *Server, action: Action, kb: Keybinding, target: ?*Toplevel) void {
         const toplevel = target orelse if (server.seat.keyboard_state.focused_surface) |surface| blk: {
             if (wlr.XdgSurface.tryFromWlrSurface(surface)) |xdg_surface| {
                 break :blk View.fromXdgSurface(xdg_surface);
@@ -1396,6 +1440,10 @@ pub const Server = struct {
         } else null;
 
         switch (action) {
+            .toggle_marked_mode => {
+                server.marked_mode = !server.marked_mode;
+                server.refreshBars();
+            },
             .toggle_layout => {
                 const ws = server.focused_workspace;
                 const outgoing = ws.layout;

@@ -38,6 +38,7 @@ pub const Action = enum {
     toggle_tiling_layout,
     toggle_ribbon_layout,
     reload_config,
+    toggle_marked_mode,
 };
 
 pub const DisplayMode = enum {

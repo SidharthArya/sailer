@@ -100,6 +100,12 @@ pub const Bar = struct {
             &x_offset,
         );
 
+        if (self.server.marked_mode) {
+            x_offset += 8;
+            self.drawText(pixels, "[M]", x_offset, 16, Theme.pink);
+            x_offset += 32;
+        }
+
         // Clock (Blue)
         Clock.render(self, pixels);
 

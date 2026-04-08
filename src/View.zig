@@ -8,6 +8,7 @@ pub const Toplevel = struct {
     workspace: *@import("Workspace.zig").Workspace,
     link: wl.list.Link = undefined,
     focus_link: wl.list.Link = undefined,
+    all_link: wl.list.Link = undefined,
     xdg_toplevel: *wlr.XdgToplevel,
     scene_tree: *wlr.SceneTree,
     xdg_surface_tree: *wlr.SceneTree,
@@ -318,6 +319,7 @@ pub const Toplevel = struct {
 
         toplevel.link.remove();
         toplevel.focus_link.remove();
+        toplevel.all_link.remove();
         toplevel.scene_tree.node.setEnabled(false);
         toplevel.workspace.arrange();
 
