@@ -50,6 +50,9 @@ pub const LayerSurface = struct {
         wlr_layer_surface.surface.events.unmap.add(&self.unmap);
         wlr_layer_surface.events.destroy.add(&self.destroy);
         wlr_layer_surface.events.new_popup.add(&self.new_popup);
+        
+        // Send initial configure event so the client knows what size to allocate
+        self.configure();
 
         return self;
     }

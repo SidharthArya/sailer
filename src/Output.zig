@@ -56,6 +56,7 @@ pub const Output = struct {
         output.background = server.bg_tree.createSceneRect(box.width, box.height, &server.bg_color) catch null;
         if (output.background) |bg| {
             bg.node.setPosition(box.x, box.y);
+            bg.node.lowerToBottom();
             bg.node.setEnabled(true);
             std.log.info("Background created for {s} at ({d}, {d}) {d}x{d} (parent=bg_tree)", .{ wlr_output.name, box.x, box.y, box.width, box.height });
         }
