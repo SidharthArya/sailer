@@ -112,6 +112,7 @@ pub const Keybinding = struct {
     key: []const u8 = "",
     modifiers: []const []const u8 = &.{},
     action: ?Action = null,
+    actions: ?[]const Action = null,
     command: ?[]const u8 = null,
     app_id: ?[]const u8 = null,
     workspace_index: ?u32 = null,
