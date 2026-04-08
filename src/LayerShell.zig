@@ -96,16 +96,6 @@ pub const LayerSurface = struct {
         const self: *LayerSurface = @fieldParentPtr("map", listener);
         std.log.info("Layer surface MAP: {s}", .{self.wlr_layer_surface.namespace});
         self.scene_layer_surface.tree.node.setEnabled(true);
-
-        // Bug 3 fix: once the bar's Layer Shell surface maps with an exclusive zone,
-        // clear the startup bar_height fallback so getUsableArea only subtracts once.
-        if (self.wlr_layer_surface.current.exclusive_zone > 0 and
-            self.wlr_layer_surface.current.anchor.top and
-            !self.wlr_layer_surface.current.anchor.bottom)
-        {
-            self.server.bar_height = 0;
-        }
-
         self.server.updateLayout();
 
         if (self.wlr_layer_surface.current.keyboard_interactive != .none) {

@@ -92,6 +92,19 @@ pub const Workspace = struct {
         }
 
         self.layout.arrange(self, layout_box);
+
+        // Position the workspace scene tree at the usable area origin.
+        // This ensures the bar is not overlapped regardless of which layout is active.
+        // Ribbon also does this internally (for scroll support), so this is a no-op for Ribbon
+        // but essential for Tiling, Floating, and SmartView layouts.
+        if (self.server.display_mode == .discrete) {
+            if (self.visible_on) |output| {
+                var out_box: wlr.Box = undefined;
+                self.server.output_layout.getBox(output.wlr_output, &out_box);
+                self.scene_tree.node.setPosition(out_box.x, out_box.y + self.server.bar_height);
+            }
+        }
+
         self.server.refreshBars();
     }
 

@@ -1585,14 +1585,8 @@ pub const Server = struct {
                         t.workspace = current_ws;
                         t.scene_tree.node.reparent(current_ws.scene_tree);
                         t.hidden = false;
-                        // Center on first show (x/y still at default 0,0)
-                        if (t.x == 0 and t.y == 0) {
-                            const area = current_ws.getUsableArea();
-                            const tw = if (t.xdg_toplevel.current.width > 0) t.xdg_toplevel.current.width else 800;
-                            const th = if (t.xdg_toplevel.current.height > 0) t.xdg_toplevel.current.height else 600;
-                            t.x = area.x + @divTrunc(area.width - tw, 2);
-                            t.y = area.y + @divTrunc(area.height - th, 2);
-                        }
+                        // Defer centering to first commit — real geometry not available yet
+                        if (t.x == 0 and t.y == 0) t.needs_centering = true;
                         server.focusView(t, t.xdg_toplevel.base.surface);
                     } else {
                         // Already on current workspace — toggle visibility
@@ -1600,14 +1594,8 @@ pub const Server = struct {
                         std.log.debug("toggle_scratchpad: toggled hidden to: {}", .{ t.hidden });
 
                         if (!t.hidden) {
-                            // Center on first show (x/y still at default 0,0)
-                            if (t.x == 0 and t.y == 0) {
-                                const area = current_ws.getUsableArea();
-                                const tw = if (t.xdg_toplevel.current.width > 0) t.xdg_toplevel.current.width else 800;
-                                const th = if (t.xdg_toplevel.current.height > 0) t.xdg_toplevel.current.height else 600;
-                                t.x = area.x + @divTrunc(area.width - tw, 2);
-                                t.y = area.y + @divTrunc(area.height - th, 2);
-                            }
+                            // Defer centering to first commit — real geometry not available yet
+                            if (t.x == 0 and t.y == 0) t.needs_centering = true;
                             server.focusView(t, t.xdg_toplevel.base.surface);
                         } else {
                             // If we just hid the focused window, clear focus

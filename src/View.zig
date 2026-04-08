@@ -31,6 +31,7 @@ pub const Toplevel = struct {
     hidden: bool = false,
     urgent: bool = false,
     scratchpad_id: usize = 0, // Associating with a keybinding pointer
+    needs_centering: bool = false, // Set when scratchpad first shown; consumed on first commit with real geometry
     border_width: i32 = 2,
     active_border_color: [4]f32 = .{ 0.38, 0.44, 0.60, 1.0 },
     inactive_border_color: [4]f32 = .{ 0.15, 0.17, 0.23, 1.0 },
@@ -159,6 +160,18 @@ pub const Toplevel = struct {
                 if (geo.width > 0 and geo.height > 0) {
                     const bw = toplevel.border_width;
                     toplevel.updateLayout(geo.width + 2 * bw, geo.height + 2 * bw);
+
+                    // Center on first show — deferred here because the real size
+                    // is only available after the client's first commit.
+                    if (toplevel.needs_centering) {
+                        toplevel.needs_centering = false;
+                        const area = toplevel.workspace.getUsableArea();
+                        const outer_w = geo.width + 2 * bw;
+                        const outer_h = geo.height + 2 * bw;
+                        toplevel.x = area.x + @divTrunc(area.width - outer_w, 2);
+                        toplevel.y = area.y + @divTrunc(area.height - outer_h, 2);
+                        toplevel.scene_tree.node.setPosition(toplevel.x, toplevel.y);
+                    }
                 }
             }
             toplevel.workspace.arrange();
@@ -199,6 +212,7 @@ pub const Toplevel = struct {
                     std.log.debug("View map: claiming '{s}' as scratchpad for kb_ptr 0x{x}", .{ app_id, pending.kb_ptr });
                     toplevel.scratchpad_id = pending.kb_ptr;
                     toplevel.is_floating = true;
+                    toplevel.needs_centering = true; // center on first commit when real geometry is available
                     _ = toplevel.server.pending_scratchpads.orderedRemove(i);
                     break;
                 }
