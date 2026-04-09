@@ -72,6 +72,8 @@ pub const Output = struct {
         const output: *Output = @fieldParentPtr("listeners", listeners);
 
 
+        if (!output.server.session_active) return;
+
         const scene_output = output.server.scene.getSceneOutput(output.wlr_output) orelse {
             var state = wlr.Output.State.init();
             defer state.finish();
@@ -123,6 +125,9 @@ pub const Output = struct {
         const server = output.server;
 
         std.log.info("Output '{s}' destroyed", .{output.wlr_output.name});
+
+        server.output_layout.remove(output.wlr_output);
+        if (server.scene.getSceneOutput(output.wlr_output)) |so| so.destroy();
 
         output.listeners.destroy.link.remove();
         output.listeners.frame.link.remove();

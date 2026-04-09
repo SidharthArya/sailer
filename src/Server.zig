@@ -122,9 +122,39 @@ pub const Server = struct {
     active_menu: ?*Menu = null,
     active_session_lock: ?*SessionLock = null,
     lid_closed: bool = false,
+    session_active: bool = true,
     marked_mode: bool = false,
     spawn_once_pids: std.AutoHashMapUnmanaged(u64, i32) = .{},
     listeners: Listeners,
+
+    pub const Drag = struct {
+        server: *Server,
+        wlr_drag: *wlr.Drag,
+        scene_icon: ?*wlr.SceneTree = null,
+        destroy: wl.Listener(*wlr.Drag),
+
+        pub fn create(server: *Server, wlr_drag: *wlr.Drag) !*Drag {
+            const drag = try std.heap.c_allocator.create(Drag);
+            drag.* = .{
+                .server = server,
+                .wlr_drag = wlr_drag,
+                .destroy = .init(handleDragDestroy),
+            };
+            wlr_drag.events.destroy.add(&drag.destroy);
+
+            if (wlr_drag.icon) |icon| {
+                drag.scene_icon = server.overlay_tree.createSceneDragIcon(icon) catch null;
+            }
+
+            return drag;
+        }
+
+        fn handleDragDestroy(listener: *wl.Listener(*wlr.Drag), _: *wlr.Drag) void {
+            const drag: *Drag = @fieldParentPtr("destroy", listener);
+            drag.destroy.link.remove();
+            std.heap.c_allocator.destroy(drag);
+        }
+    };
 
     pub const Listeners = extern struct {
         new_output: wl.Listener(*wlr.Output),
@@ -135,6 +165,7 @@ pub const Server = struct {
         request_set_cursor: wl.Listener(*wlr.Seat.event.RequestSetCursor),
         request_set_selection: wl.Listener(*wlr.Seat.event.RequestSetSelection),
         request_set_primary_selection: wl.Listener(*wlr.Seat.event.RequestSetPrimarySelection),
+        request_start_drag: wl.Listener(*wlr.Seat.event.RequestStartDrag),
         cursor_motion: wl.Listener(*wlr.Pointer.event.Motion),
         cursor_motion_absolute: wl.Listener(*wlr.Pointer.event.MotionAbsolute),
         cursor_button: wl.Listener(*wlr.Pointer.event.Button),
@@ -144,6 +175,7 @@ pub const Server = struct {
         new_virtual_keyboard: wl.Listener(*wlr.VirtualKeyboardV1),
         request_activate: wl.Listener(*wlr.XdgActivationV1.event.RequestActivate),
         request_set_shape: wl.Listener(*wlr.CursorShapeManagerV1.event.RequestSetShape),
+        session_active: wl.Listener(void),
     };
 
 
@@ -157,6 +189,7 @@ pub const Server = struct {
         server.listeners.request_set_cursor = .init(Server.requestSetCursor);
         server.listeners.request_set_selection = .init(Server.requestSetSelection);
         server.listeners.request_set_primary_selection = .init(Server.requestSetPrimarySelection);
+        server.listeners.request_start_drag = .init(Server.requestStartDrag);
         server.listeners.new_layer_surface = .init(Server.newLayerSurface);
         server.listeners.cursor_motion = .init(Server.cursorMotion);
         server.listeners.cursor_motion_absolute = .init(Server.cursorMotionAbsolute);
@@ -167,6 +200,7 @@ pub const Server = struct {
         server.listeners.new_virtual_keyboard = .init(Server.newVirtualKeyboard);
         server.listeners.request_activate = .init(Server.requestActivate);
         server.listeners.request_set_shape = .init(Server.requestSetShape);
+        server.listeners.session_active = .init(Server.handleSessionActive);
 
         server.keyboards.init();
         server.outputs.init();
@@ -191,6 +225,7 @@ pub const Server = struct {
         server.device_map = .{};
         server.marked_mode = false;
         server.spawn_once_pids = .{};
+        server.session_active = true;
 
         server.keyboards.init();
         server.outputs.init();
@@ -235,6 +270,10 @@ pub const Server = struct {
 
         server.virtual_keyboard_mgr = try wlr.VirtualKeyboardManagerV1.create(wl_server);
         server.virtual_keyboard_mgr.events.new_virtual_keyboard.add(&server.listeners.new_virtual_keyboard);
+        
+        if (server.session) |session| {
+            session.events.active.add(&server.listeners.session_active);
+        }
 
         server.backend.events.new_output.add(&server.listeners.new_output);
         server.xdg_shell.events.new_toplevel.add(&server.listeners.new_xdg_toplevel);
@@ -244,6 +283,7 @@ pub const Server = struct {
         server.seat.events.request_set_cursor.add(&server.listeners.request_set_cursor);
         server.seat.events.request_set_selection.add(&server.listeners.request_set_selection);
         server.seat.events.request_set_primary_selection.add(&server.listeners.request_set_primary_selection);
+        server.seat.events.request_start_drag.add(&server.listeners.request_start_drag);
 
 
         server.cursor.events.motion.add(&server.listeners.cursor_motion);
@@ -385,6 +425,7 @@ pub const Server = struct {
     }
 
     pub fn handleNewXdgPopup(server: *Server, xdg_popup: *wlr.XdgPopup, parent_tree: *wlr.SceneTree) void {
+        if (!server.session_active) return;
         const xdg_surface = xdg_popup.base;
         const scene_tree = parent_tree.createSceneXdgSurface(xdg_surface) catch {
             std.log.err("failed to allocate xdg popup node", .{});
@@ -395,7 +436,6 @@ pub const Server = struct {
             scene_tree.node.destroy();
             return;
         };
-        _ = server;
 
     }
 
@@ -577,6 +617,7 @@ pub const Server = struct {
     }
 
     pub fn updateLayout(server: *Server) void {
+        if (!server.session_active) return;
 
         // 1. Ensure all outputs are in the layout and have a workspace assigned
         var it = server.outputs.link.next;
@@ -737,6 +778,7 @@ pub const Server = struct {
         server.listeners.request_set_cursor.link.remove();
         server.listeners.request_set_selection.link.remove();
         server.listeners.request_set_primary_selection.link.remove();
+        server.listeners.request_start_drag.link.remove();
         server.listeners.cursor_motion.link.remove();
         server.listeners.cursor_motion_absolute.link.remove();
         server.listeners.cursor_button.link.remove();
@@ -991,6 +1033,7 @@ pub const Server = struct {
     }
 
     pub fn focusLayer(server: *Server, layer: *LayerSurface) void {
+        if (!server.session_active) return;
         const surface = layer.wlr_layer_surface.surface;
 
         if (server.seat.keyboard_state.focused_surface) |previous_surface| {
@@ -1028,7 +1071,12 @@ pub const Server = struct {
         const listeners: *Server.Listeners = @fieldParentPtr("new_input", listener);
         const server: *Server = @fieldParentPtr("listeners", listeners);
 
-        std.debug.print("DEBUG: newInput device={*} type={}\n", .{device, device.type});
+        std.debug.print("DEBUG: newInput device={*} type={} session_active={}\n", .{device, device.type, server.session_active});
+
+        if (!server.session_active) {
+            std.log.info("Ignoring new input device during inactive session", .{});
+            return;
+        }
 
         if (server.device_map.get(device)) |_| {
             std.debug.print("DEBUG: device {*} already handled\n", .{device});
@@ -1105,6 +1153,41 @@ pub const Server = struct {
         const server: *Server = @fieldParentPtr("listeners", listeners);
 
         server.seat.setPrimarySelection(event.source, event.serial);
+    }
+
+    fn handleSessionActive(listener: *wl.Listener(void)) void {
+        const listeners: *Server.Listeners = @fieldParentPtr("session_active", listener);
+        const server: *Server = @fieldParentPtr("listeners", listeners);
+
+        const active = if (server.session) |s| s.active else true;
+        server.session_active = active;
+
+        if (active) {
+            std.log.info("Session active, resuming compositor state", .{});
+            server.updateLayout();
+        } else {
+            std.log.info("Session inactive (TTY switch), pausing state updates", .{});
+            // Clear focus when switching away to prevent stuck keys or phantom input
+            wlr.Seat.keyboardNotifyClearFocus(server.seat);
+            wlr.Seat.pointerClearFocus(server.seat);
+        }
+    }
+
+    fn requestStartDrag(
+        listener: *wl.Listener(*wlr.Seat.event.RequestStartDrag),
+        event: *wlr.Seat.event.RequestStartDrag,
+    ) void {
+        const listeners: *Server.Listeners = @fieldParentPtr("request_start_drag", listener);
+        const server: *Server = @fieldParentPtr("listeners", listeners);
+
+        if (server.seat.validatePointerGrabSerial(event.origin, event.serial)) {
+            server.seat.startDrag(event.drag, event.serial);
+            _ = Drag.create(server, event.drag) catch |err| {
+                std.log.err("failed to create drag handler: {}", .{err});
+            };
+        } else {
+            std.log.warn("rejected drag request: invalid serial", .{});
+        }
     }
 
     fn requestSetShape(
@@ -1523,6 +1606,7 @@ pub const Server = struct {
     }
 
     pub fn executeAction(server: *Server, action: Action, kb: Keybinding, target: ?*Toplevel) void {
+        if (!server.session_active) return;
         const broadcastable = switch (action) {
             .resize_shrink, .resize_expand,
             .move_left, .move_right, .move_up, .move_down,

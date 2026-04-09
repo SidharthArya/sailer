@@ -180,11 +180,19 @@ fn handleDestroy(listener: *wl.Listener(*wlr.InputDevice), device: *wlr.InputDev
         device.data = null;
     }
 
+    // If session is inactive, don't try to shuffle focus or notify the seat;
+    // wlroots internal state will be cleaned up on device destroy, and we
+    // should not touch the seat while it's in a paused state.
+    if (!server.session_active) {
+        std.heap.c_allocator.destroy(keyboard);
+        return;
+    }
+
     // If this was the active keyboard on the seat, restore to the first remaining keyboard.
     if (wlr.Seat.getKeyboard(server.seat) == device.toKeyboard()) {
         wlr.Seat.setKeyboard(server.seat, null);
         var it = server.keyboards.link.next;
-        while (it != &server.keyboards.link) : (it = it.?.next) {
+        while (it != null and it != &server.keyboards.link) : (it = it.?.next) {
             const remaining: *KeyboardDevice = @fieldParentPtr("link", it.?);
             if (remaining != keyboard) {
                 wlr.Seat.setKeyboard(server.seat, remaining.device.toKeyboard());
