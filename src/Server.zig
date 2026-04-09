@@ -134,6 +134,7 @@ pub const Server = struct {
         new_input: wl.Listener(*wlr.InputDevice),
         request_set_cursor: wl.Listener(*wlr.Seat.event.RequestSetCursor),
         request_set_selection: wl.Listener(*wlr.Seat.event.RequestSetSelection),
+        request_set_primary_selection: wl.Listener(*wlr.Seat.event.RequestSetPrimarySelection),
         cursor_motion: wl.Listener(*wlr.Pointer.event.Motion),
         cursor_motion_absolute: wl.Listener(*wlr.Pointer.event.MotionAbsolute),
         cursor_button: wl.Listener(*wlr.Pointer.event.Button),
@@ -155,6 +156,7 @@ pub const Server = struct {
         server.listeners.new_input = .init(Server.newInput);
         server.listeners.request_set_cursor = .init(Server.requestSetCursor);
         server.listeners.request_set_selection = .init(Server.requestSetSelection);
+        server.listeners.request_set_primary_selection = .init(Server.requestSetPrimarySelection);
         server.listeners.new_layer_surface = .init(Server.newLayerSurface);
         server.listeners.cursor_motion = .init(Server.cursorMotion);
         server.listeners.cursor_motion_absolute = .init(Server.cursorMotionAbsolute);
@@ -241,6 +243,7 @@ pub const Server = struct {
 
         server.seat.events.request_set_cursor.add(&server.listeners.request_set_cursor);
         server.seat.events.request_set_selection.add(&server.listeners.request_set_selection);
+        server.seat.events.request_set_primary_selection.add(&server.listeners.request_set_primary_selection);
 
 
         server.cursor.events.motion.add(&server.listeners.cursor_motion);
@@ -733,6 +736,7 @@ pub const Server = struct {
         server.listeners.new_xdg_popup.link.remove();
         server.listeners.request_set_cursor.link.remove();
         server.listeners.request_set_selection.link.remove();
+        server.listeners.request_set_primary_selection.link.remove();
         server.listeners.cursor_motion.link.remove();
         server.listeners.cursor_motion_absolute.link.remove();
         server.listeners.cursor_button.link.remove();
@@ -1091,6 +1095,16 @@ pub const Server = struct {
         const server: *Server = @fieldParentPtr("listeners", listeners);
 
         server.seat.setSelection(event.source, event.serial);
+    }
+
+    fn requestSetPrimarySelection(
+        listener: *wl.Listener(*wlr.Seat.event.RequestSetPrimarySelection),
+        event: *wlr.Seat.event.RequestSetPrimarySelection,
+    ) void {
+        const listeners: *Server.Listeners = @fieldParentPtr("request_set_primary_selection", listener);
+        const server: *Server = @fieldParentPtr("listeners", listeners);
+
+        server.seat.setPrimarySelection(event.source, event.serial);
     }
 
     fn requestSetShape(
