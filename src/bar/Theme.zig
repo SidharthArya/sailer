@@ -8,4 +8,7 @@ pub const Theme = struct {
     pub const crust = c.pixman_color_t{ .red = 0x1111, .green = 0x1111, .blue = 0x1b1b, .alpha = 0xffff };
     pub const base = c.pixman_color_t{ .red = 0x1e1e, .green = 0x1e1e, .blue = 0x2e2e, .alpha = 0xffff };
     pub const peach = c.pixman_color_t{ .red = 0xffff, .green = 0x5999, .blue = 0x1999, .alpha = 0xffff };
+    pub const green = c.pixman_color_t{ .red = 0xa6a6, .green = 0xe3e3, .blue = 0xa1a1, .alpha = 0xffff };
+    pub const yellow = c.pixman_color_t{ .red = 0xf9f9, .green = 0xe2e2, .blue = 0xafaf, .alpha = 0xffff };
+    pub const red = c.pixman_color_t{ .red = 0xf3f3, .green = 0x8b8b, .blue = 0xa8a8, .alpha = 0xffff };
 };

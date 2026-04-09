@@ -12,6 +12,7 @@ const Workspaces = bar_workspaces.Workspaces;
 const Theme = @import("bar/Theme.zig").Theme;
 const bar_clock = @import("bar/Clock.zig");
 const Clock = bar_clock.Clock;
+const Battery = @import("bar/Battery.zig").Battery;
 const Renderer = @import("Renderer.zig").Renderer;
 const Config = @import("Config.zig");
 
@@ -105,6 +106,9 @@ pub const Bar = struct {
             self.drawText(pixels, "[M]", x_offset, 16, Theme.pink);
             x_offset += 32;
         }
+
+        // Battery
+        Battery.render(self, pixels);
 
         // Clock (Blue)
         Clock.render(self, pixels);
