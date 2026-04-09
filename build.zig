@@ -95,6 +95,8 @@ pub fn build(b: *std.Build) void {
     scanner.addSystemProtocol("staging/content-type/content-type-v1.xml");
     scanner.addSystemProtocol("staging/ext-image-copy-capture/ext-image-copy-capture-v1.xml");
     scanner.addSystemProtocol("staging/ext-workspace/ext-workspace-v1.xml");
+    scanner.addSystemProtocol("staging/xdg-toplevel-icon/xdg-toplevel-icon-v1.xml");
+    scanner.addSystemProtocol("unstable/text-input/text-input-unstable-v3.xml");
     scanner.addCustomProtocol(b.path("protocols/wlr-layer-shell-unstable-v1.xml"));
     scanner.addCustomProtocol(b.path("protocols/virtual-keyboard-unstable-v1.xml"));
 
@@ -118,6 +120,8 @@ pub fn build(b: *std.Build) void {
     scanner.generate("wp_cursor_shape_manager_v1", 1);
     scanner.generate("wp_tearing_control_manager_v1", 1);
     scanner.generate("wp_content_type_manager_v1", 1);
+    scanner.generate("xdg_toplevel_icon_manager_v1", 1);
+    scanner.generate("zwp_text_input_manager_v3", 1);
 
     const mod_wayland = b.createModule(.{ .root_source_file = scanner.result });
 

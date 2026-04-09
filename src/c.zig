@@ -18,4 +18,5 @@ pub const c = @cImport({
     @cInclude("drm_fourcc.h");
     @cInclude("time.h");
     @cInclude("stdlib.h");
+    @cInclude("dbus/dbus.h");
 });
