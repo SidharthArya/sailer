@@ -74,6 +74,9 @@ pub const Server = struct {
     ext_foreign_toplevel_list_v1_mgr: *c.wlr_ext_foreign_toplevel_list_v1,
     session_lock_mgr: *wlr.SessionLockManagerV1,
     virtual_keyboard_mgr: *wlr.VirtualKeyboardManagerV1 = undefined,
+    cursor_shape_mgr: *wlr.CursorShapeManagerV1 = undefined,
+    toplevel_icon_mgr: *c.wlr_xdg_toplevel_icon_manager_v1 = undefined,
+    text_input_mgr: *wlr.TextInputManagerV3 = undefined,
 
     workspaces: [10]*Workspace = undefined,
     focused_workspace: *Workspace = undefined,
@@ -139,6 +142,7 @@ pub const Server = struct {
         new_session_lock: wl.Listener(*wlr.SessionLockV1),
         new_virtual_keyboard: wl.Listener(*wlr.VirtualKeyboardV1),
         request_activate: wl.Listener(*wlr.XdgActivationV1.event.RequestActivate),
+        request_set_shape: wl.Listener(*wlr.CursorShapeManagerV1.event.RequestSetShape),
     };
 
 
@@ -160,6 +164,7 @@ pub const Server = struct {
         server.listeners.new_session_lock = .init(Server.newSessionLock);
         server.listeners.new_virtual_keyboard = .init(Server.newVirtualKeyboard);
         server.listeners.request_activate = .init(Server.requestActivate);
+        server.listeners.request_set_shape = .init(Server.requestSetShape);
 
         server.keyboards.init();
         server.outputs.init();
@@ -278,6 +283,12 @@ pub const Server = struct {
         _ = try wlr.Presentation.create(server.wl_server, server.backend, 1);
         server.layer_shell = try wlr.LayerShellV1.create(wl_server, 4);
         server.layer_shell.events.new_surface.add(&server.listeners.new_layer_surface);
+        
+        server.cursor_shape_mgr = try wlr.CursorShapeManagerV1.create(server.wl_server, 1);
+        server.cursor_shape_mgr.events.request_set_shape.add(&server.listeners.request_set_shape);
+
+        server.toplevel_icon_mgr = c.wlr_xdg_toplevel_icon_manager_v1_create(@ptrCast(server.wl_server), 1).?;
+        server.text_input_mgr = try wlr.TextInputManagerV3.create(server.wl_server);
 
         // Initialize 10 workspaces
         for (&server.workspaces, 0..) |*ws, i| {
@@ -1079,7 +1090,20 @@ pub const Server = struct {
         const listeners: *Server.Listeners = @fieldParentPtr("request_set_selection", listener);
         const server: *Server = @fieldParentPtr("listeners", listeners);
 
-        wlr.Seat.setSelection(server.seat, event.source, event.serial);
+        server.seat.setSelection(event.source, event.serial);
+    }
+
+    fn requestSetShape(
+        listener: *wl.Listener(*wlr.CursorShapeManagerV1.event.RequestSetShape),
+        event: *wlr.CursorShapeManagerV1.event.RequestSetShape,
+    ) void {
+        const listeners: *Server.Listeners = @fieldParentPtr("request_set_shape", listener);
+        const server: *Server = @fieldParentPtr("listeners", listeners);
+
+        if (event.seat_client == server.seat.pointer_state.focused_client) {
+            const name = wlr.CursorShapeManagerV1.shapeName(event.shape);
+            server.cursor.setXcursor(server.cursor_mgr, std.mem.span(name));
+        }
     }
 
     fn cursorMotion(
