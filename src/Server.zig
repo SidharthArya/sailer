@@ -989,18 +989,24 @@ pub const Server = struct {
         self.bottom_tree.node.setEnabled(visible);
         self.top_tree.node.setEnabled(visible);
         self.bg_tree.node.setEnabled(visible);
-    }
+    }    pub fn focusView(server: *Server, toplevel: *Toplevel, surface: *wlr.Surface) void {
+        const is_popup = View.isPopup(surface);
+        const already_focused = if (server.seat.keyboard_state.focused_surface) |prev| prev == surface else false;
 
-    pub fn focusView(server: *Server, toplevel: *Toplevel, surface: *wlr.Surface) void {
+        if (already_focused and !toplevel.hidden) return;
+
         if (server.seat.keyboard_state.focused_surface) |previous_surface| {
-            if (previous_surface == surface and !toplevel.hidden) return;
             if (wlr.XdgSurface.tryFromWlrSurface(previous_surface)) |xdg_surface| {
                 if (xdg_surface.role_data.toplevel) |prev_t_wlr| {
-                    _ = wlr.XdgToplevel.setActivated(prev_t_wlr, false);
+                    // Only deactivate if we are actually switching to a different toplevel
+                    // or if the new surface is not a popup of the current one.
                     if (View.fromXdgSurface(xdg_surface)) |prev_t| {
-                        prev_t.refreshBorderColor(false);
-                        if (prev_t.foreign_toplevel) |handle| {
-                            handle.setActivated(false);
+                        if (prev_t != toplevel) {
+                            _ = wlr.XdgToplevel.setActivated(prev_t_wlr, false);
+                            prev_t.refreshBorderColor(false);
+                            if (prev_t.foreign_toplevel) |handle| {
+                                handle.setActivated(false);
+                            }
                         }
                     }
                 }
@@ -1008,16 +1014,29 @@ pub const Server = struct {
         }
 
         server.focused_workspace = toplevel.workspace;
-        toplevel.scene_tree.node.raiseToTop();
+        
+        // Avoid raising the window if we are just clicking a popup within it.
+        // Raising can trigger re-renders or configure events that close popups in some clients.
+        if (!is_popup) {
+            toplevel.scene_tree.node.raiseToTop();
+        }
+        
         toplevel.urgent = false;
         toplevel.refreshBorderColor(true);
         
         toplevel.focus_link.remove();
         toplevel.workspace.focus_history.prepend(toplevel);
 
-        _ = wlr.XdgToplevel.setActivated(toplevel.xdg_toplevel, true);
-        if (toplevel.foreign_toplevel) |handle| {
-            handle.setActivated(true);
+        // Only send activation if not already active to avoid flickering/popup cancellation
+        const already_active = server.seat.keyboard_state.focused_surface != null and 
+                             wlr.XdgSurface.tryFromWlrSurface(server.seat.keyboard_state.focused_surface.?) != null and
+                             View.fromXdgSurface(wlr.XdgSurface.tryFromWlrSurface(server.seat.keyboard_state.focused_surface.?) .?) == toplevel;
+
+        if (!already_active) {
+            _ = wlr.XdgToplevel.setActivated(toplevel.xdg_toplevel, true);
+            if (toplevel.foreign_toplevel) |handle| {
+                handle.setActivated(true);
+            }
         }
 
         if (server.seat.keyboard_state.keyboard) |kbd| {
@@ -1027,8 +1046,12 @@ pub const Server = struct {
         }
 
         const ws = toplevel.workspace;
-        ws.arrange();
-        ws.ensureViewVisible(toplevel);
+        // Don't arrange on every focus change if it's just a popup click,
+        // as arrange() can trigger configure events.
+        if (!is_popup) {
+            ws.arrange();
+            ws.ensureViewVisible(toplevel);
+        }
         server.refreshBars();
     }
 
@@ -1432,6 +1455,7 @@ pub const Server = struct {
             }
             server.cursor_mode = .passthrough;
         } else if (server.viewAt(server.cursor.x, server.cursor.y)) |res| {
+            // If it's a popup, we just focus the surface but avoid disrupting the toplevel
             server.focusView(res.toplevel, res.surface);
 
             if (is_ctrl) {
@@ -1474,7 +1498,7 @@ pub const Server = struct {
             for (server.workspaces) |ws| {
                 if (ws.visible_on != null and ws.visible_on.?.wlr_output == wlr_out) {
                     server.focused_workspace = ws;
-                    _ = server.seat.pointerNotifyButton(event.time_msec, event.button, event.state);
+                    // Don't call pointerNotifyButton here if we are going to call it at 1484 anyway
                     break;
                 }
             }
