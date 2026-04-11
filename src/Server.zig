@@ -990,18 +990,22 @@ pub const Server = struct {
         self.top_tree.node.setEnabled(visible);
         self.bg_tree.node.setEnabled(visible);
     }    pub fn focusView(server: *Server, toplevel: *Toplevel, surface: *wlr.Surface) void {
-        const is_popup = View.isPopup(surface);
-        const already_focused = if (server.seat.keyboard_state.focused_surface) |prev| prev == surface else false;
+        _ = surface;
+        var already_active = false;
+        if (server.focused_workspace == toplevel.workspace) {
+            if (toplevel.workspace.focus_history.link.next) |head| {
+                if (head != &toplevel.workspace.focus_history.link) {
+                    const active_t: *View.Toplevel = @fieldParentPtr("focus_link", head);
+                    if (active_t == toplevel) already_active = true;
+                }
+            }
+        }
 
-        if (already_focused and !toplevel.hidden) return;
-
-        if (server.seat.keyboard_state.focused_surface) |previous_surface| {
-            if (wlr.XdgSurface.tryFromWlrSurface(previous_surface)) |xdg_surface| {
-                if (xdg_surface.role_data.toplevel) |prev_t_wlr| {
-                    // Only deactivate if we are actually switching to a different toplevel
-                    // or if the new surface is not a popup of the current one.
-                    if (View.fromXdgSurface(xdg_surface)) |prev_t| {
-                        if (prev_t != toplevel) {
+        if (!already_active) {
+            if (server.seat.keyboard_state.focused_surface) |previous_surface| {
+                if (wlr.XdgSurface.tryFromWlrSurface(previous_surface)) |xdg_surface| {
+                    if (xdg_surface.role_data.toplevel) |prev_t_wlr| {
+                        if (View.fromXdgSurface(xdg_surface)) |prev_t| {
                             _ = wlr.XdgToplevel.setActivated(prev_t_wlr, false);
                             prev_t.refreshBorderColor(false);
                             if (prev_t.foreign_toplevel) |handle| {
@@ -1011,49 +1015,41 @@ pub const Server = struct {
                     }
                 }
             }
-        }
 
-        server.focused_workspace = toplevel.workspace;
-        
-        // Avoid raising the window if we are just clicking a popup within it.
-        // Raising can trigger re-renders or configure events that close popups in some clients.
-        if (!is_popup) {
             toplevel.scene_tree.node.raiseToTop();
-        }
-        
-        toplevel.urgent = false;
-        toplevel.refreshBorderColor(true);
-        
-        toplevel.focus_link.remove();
-        toplevel.workspace.focus_history.prepend(toplevel);
+            
+            toplevel.urgent = false;
+            toplevel.refreshBorderColor(true);
+            
+            toplevel.focus_link.remove();
+            toplevel.workspace.focus_history.prepend(toplevel);
 
-        // Only send activation if not already active to avoid flickering/popup cancellation
-        const already_active = server.seat.keyboard_state.focused_surface != null and 
-                             wlr.XdgSurface.tryFromWlrSurface(server.seat.keyboard_state.focused_surface.?) != null and
-                             View.fromXdgSurface(wlr.XdgSurface.tryFromWlrSurface(server.seat.keyboard_state.focused_surface.?) .?) == toplevel;
-
-        if (!already_active) {
             _ = wlr.XdgToplevel.setActivated(toplevel.xdg_toplevel, true);
             if (toplevel.foreign_toplevel) |handle| {
                 handle.setActivated(true);
             }
         }
 
-        if (server.seat.keyboard_state.keyboard) |kbd| {
-            wlr.Seat.keyboardNotifyEnter(server.seat, surface, kbd.keycodes[0..kbd.num_keycodes], &kbd.modifiers);
-        } else {
-            wlr.Seat.keyboardNotifyEnter(server.seat, surface, &[_]u32{}, &wlr.Keyboard.Modifiers{ .depressed = 0, .latched = 0, .locked = 0, .group = 0 });
+        server.focused_workspace = toplevel.workspace;
+
+        const target_surface = toplevel.xdg_toplevel.base.surface;
+        if (server.seat.keyboard_state.focused_surface != target_surface) {
+            if (server.seat.keyboard_state.keyboard) |kbd| {
+                wlr.Seat.keyboardNotifyEnter(server.seat, target_surface, kbd.keycodes[0..kbd.num_keycodes], &kbd.modifiers);
+            } else {
+                wlr.Seat.keyboardNotifyEnter(server.seat, target_surface, &[_]u32{}, &wlr.Keyboard.Modifiers{ .depressed = 0, .latched = 0, .locked = 0, .group = 0 });
+            }
         }
 
-        const ws = toplevel.workspace;
-        // Don't arrange on every focus change if it's just a popup click,
-        // as arrange() can trigger configure events.
-        if (!is_popup) {
+        if (!already_active) {
+            const ws = toplevel.workspace;
             ws.arrange();
             ws.ensureViewVisible(toplevel);
+            server.refreshBars();
         }
-        server.refreshBars();
+
     }
+
 
     pub fn focusLayer(server: *Server, layer: *LayerSurface) void {
         if (!server.session_active) return;
@@ -1068,10 +1064,12 @@ pub const Server = struct {
             }
         }
 
-        if (server.seat.keyboard_state.keyboard) |kbd| {
-            wlr.Seat.keyboardNotifyEnter(server.seat, surface, kbd.keycodes[0..kbd.num_keycodes], &kbd.modifiers);
-        } else {
-            wlr.Seat.keyboardNotifyEnter(server.seat, surface, &[_]u32{}, &wlr.Keyboard.Modifiers{ .depressed = 0, .latched = 0, .locked = 0, .group = 0 });
+        if (server.seat.keyboard_state.focused_surface != surface) {
+            if (server.seat.keyboard_state.keyboard) |kbd| {
+                wlr.Seat.keyboardNotifyEnter(server.seat, surface, kbd.keycodes[0..kbd.num_keycodes], &kbd.modifiers);
+            } else {
+                wlr.Seat.keyboardNotifyEnter(server.seat, surface, &[_]u32{}, &wlr.Keyboard.Modifiers{ .depressed = 0, .latched = 0, .locked = 0, .group = 0 });
+            }
         }
     }
 
@@ -1292,7 +1290,9 @@ pub const Server = struct {
                     if (n.type == .buffer) {
                         const scene_buffer = wlr.SceneBuffer.fromNode(n);
                         if (wlr.SceneSurface.tryFromBuffer(scene_buffer)) |scene_surface| {
-                            wlr.Seat.pointerNotifyEnter(server.seat, scene_surface.surface, sx, sy);
+                            if (server.seat.pointer_state.focused_surface != scene_surface.surface) {
+                                wlr.Seat.pointerNotifyEnter(server.seat, scene_surface.surface, sx, sy);
+                            }
                             wlr.Seat.pointerNotifyMotion(server.seat, time_msec, sx, sy);
                             return;
                         }
@@ -1419,12 +1419,51 @@ pub const Server = struct {
             }
         }
 
-        var is_ctrl = false;
+        var is_logo = false;
         if (wlr.Seat.getKeyboard(server.seat)) |kb| {
             const mods = wlr.Keyboard.getModifiers(kb);
-            if (mods.logo) is_ctrl = true;
+            if (mods.logo) is_logo = true;
         }
 
+        // If it's a move/resize interaction, intercept it early
+        if (is_logo and event.state == .pressed) {
+            if (server.viewAt(server.cursor.x, server.cursor.y)) |res| {
+                server.grabbed_view = res.toplevel;
+                if (event.button == 0x110) { // BTN_LEFT
+                    server.cursor_mode = .move;
+                    const ws = res.toplevel.workspace;
+                    const scroll: i32 = if (ws.layout == .ribbon) ws.scroll_offset_x else 0;
+                    server.grab_x = server.cursor.x - @as(f64, @floatFromInt(res.toplevel.x + scroll));
+                    server.grab_y = server.cursor.y - @as(f64, @floatFromInt(res.toplevel.y));
+                    server.focusView(res.toplevel, res.surface);
+                    return; 
+                } else if (event.button == 0x111) { // BTN_RIGHT
+                    server.cursor_mode = .resize;
+                    const box = res.toplevel.xdg_toplevel.base.geometry;
+                    const center_x = @as(f64, @floatFromInt(res.toplevel.x + box.x + @divTrunc(box.width, 2)));
+                    const center_y = @as(f64, @floatFromInt(res.toplevel.y + box.y + @divTrunc(box.height, 2)));
+                    server.resize_edges = .{};
+                    if (server.cursor.x < center_x) server.resize_edges.left = true else server.resize_edges.right = true;
+                    if (server.cursor.y < center_y) server.resize_edges.top = true else server.resize_edges.bottom = true;
+                    const border_x = res.toplevel.x + box.x + if (server.resize_edges.right) box.width else 0;
+                    const border_y = res.toplevel.y + box.y + if (server.resize_edges.bottom) box.height else 0;
+                    server.grab_x = server.cursor.x - @as(f64, @floatFromInt(border_x));
+                    server.grab_y = server.cursor.y - @as(f64, @floatFromInt(border_y));
+                    server.grab_box = box;
+                    server.grab_box.x += res.toplevel.x;
+                    server.grab_box.y += res.toplevel.y;
+                    server.grab_percent = res.toplevel.width_percent;
+                    server.focusView(res.toplevel, res.surface);
+                    return;
+                }
+            }
+        }
+
+        // 1. Deliver the button event to the seat first. 
+        // This ensures the client sees the click before we potentially disrupt focus/activation.
+        _ = server.seat.pointerNotifyButton(event.time_msec, event.button, event.state);
+
+        // 2. Handle focus and mode transitions after event delivery
         if (event.state == .released) {
             if (server.cursor_mode == .move) {
                 if (server.grabbed_view) |toplevel| {
@@ -1455,57 +1494,15 @@ pub const Server = struct {
             }
             server.cursor_mode = .passthrough;
         } else if (server.viewAt(server.cursor.x, server.cursor.y)) |res| {
-            // If it's a popup, we just focus the surface but avoid disrupting the toplevel
             server.focusView(res.toplevel, res.surface);
-
-            if (is_ctrl) {
-                server.grabbed_view = res.toplevel;
-                if (event.button == 0x110) { // BTN_LEFT
-                    server.cursor_mode = .move;
-                    // In ribbon layout the scene tree is offset by scroll_offset_x,
-                    // so the window's screen x = toplevel.x + scroll_offset_x
-                    const ws = res.toplevel.workspace;
-                    const scroll: i32 = if (ws.layout == .ribbon) ws.scroll_offset_x else 0;
-                    server.grab_x = server.cursor.x - @as(f64, @floatFromInt(res.toplevel.x + scroll));
-                    server.grab_y = server.cursor.y - @as(f64, @floatFromInt(res.toplevel.y));
-                    return; // Intercept
-                } else if (event.button == 0x111) { // BTN_RIGHT
-                    server.cursor_mode = .resize;
-                    
-                    const box = res.toplevel.xdg_toplevel.base.geometry;
-                    const center_x = @as(f64, @floatFromInt(res.toplevel.x + box.x + @divTrunc(box.width, 2)));
-                    const center_y = @as(f64, @floatFromInt(res.toplevel.y + box.y + @divTrunc(box.height, 2)));
-
-                    server.resize_edges = .{};
-                    if (server.cursor.x < center_x) server.resize_edges.left = true else server.resize_edges.right = true;
-                    if (server.cursor.y < center_y) server.resize_edges.top = true else server.resize_edges.bottom = true;
-
-                    const border_x = res.toplevel.x + box.x + if (server.resize_edges.right) box.width else 0;
-                    const border_y = res.toplevel.y + box.y + if (server.resize_edges.bottom) box.height else 0;
-
-                    server.grab_x = server.cursor.x - @as(f64, @floatFromInt(border_x));
-                    server.grab_y = server.cursor.y - @as(f64, @floatFromInt(border_y));
-
-                    server.grab_box = box;
-                    server.grab_box.x += res.toplevel.x;
-                    server.grab_box.y += res.toplevel.y;
-
-                    server.grab_percent = res.toplevel.width_percent;
-                    return; // Intercept
-                }
-            }
         } else if (server.output_layout.outputAt(server.cursor.x, server.cursor.y)) |wlr_out| {
             for (server.workspaces) |ws| {
                 if (ws.visible_on != null and ws.visible_on.?.wlr_output == wlr_out) {
                     server.focused_workspace = ws;
-                    // Don't call pointerNotifyButton here if we are going to call it at 1484 anyway
                     break;
                 }
             }
         }
-
-        // Only explicitly notify to client if we didn't return early to consume the event
-        _ = server.seat.pointerNotifyButton(event.time_msec, event.button, event.state);
     }
 
     fn cursorAxis(

@@ -248,8 +248,10 @@ const Server = struct {
     }
 
     fn focusView(server: *Server, toplevel: *Toplevel, surface: *wlr.Surface) void {
+        _ = surface;
+        const target_surface = toplevel.xdg_toplevel.base.surface;
         if (server.seat.keyboard_state.focused_surface) |previous_surface| {
-            if (previous_surface == surface) return;
+            if (previous_surface == target_surface) return;
             if (wlr.XdgSurface.tryFromWlrSurface(previous_surface)) |xdg_surface| {
                 _ = xdg_surface.role_data.toplevel.?.setActivated(false);
             }
@@ -263,7 +265,7 @@ const Server = struct {
 
         const wlr_keyboard = server.seat.getKeyboard() orelse return;
         server.seat.keyboardNotifyEnter(
-            surface,
+            target_surface,
             wlr_keyboard.keycodes[0..wlr_keyboard.num_keycodes],
             &wlr_keyboard.modifiers,
         );
