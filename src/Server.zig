@@ -1202,12 +1202,32 @@ pub const Server = struct {
         const server: *Server = @fieldParentPtr("listeners", listeners);
 
         if (server.seat.validatePointerGrabSerial(event.origin, event.serial)) {
-            server.seat.startDrag(event.drag, event.serial);
+            // Pointer-driven DnD requires a pointer grab (not wlr_seat_start_drag alone).
+            server.seat.startPointerDrag(event.drag, event.serial);
             _ = Drag.create(server, event.drag) catch |err| {
                 std.log.err("failed to create drag handler: {}", .{err});
             };
-        } else {
-            std.log.warn("rejected drag request: invalid serial", .{});
+            return;
+        }
+
+        var touch_point: ?*wlr.TouchPoint = null;
+        if (server.seat.validateTouchGrabSerial(
+            event.origin,
+            event.serial,
+            @ptrCast(&touch_point),
+        )) {
+            if (touch_point) |point| {
+                server.seat.startTouchDrag(event.drag, event.serial, point);
+                _ = Drag.create(server, event.drag) catch |err| {
+                    std.log.err("failed to create drag handler: {}", .{err});
+                };
+            }
+            return;
+        }
+
+        std.log.warn("rejected drag request: invalid pointer/touch serial ({})", .{event.serial});
+        if (event.drag.source) |source| {
+            wlr.DataSource.destroy(source);
         }
     }
 
