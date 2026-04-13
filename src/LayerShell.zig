@@ -93,6 +93,7 @@ pub const LayerSurface = struct {
             // For now, we'll just trigger a global layout update
             self.server.updateLayout();
         }
+        self.server.scheduleFrame();
     }
 
     fn handleMap(listener: *wl.Listener(void)) void {

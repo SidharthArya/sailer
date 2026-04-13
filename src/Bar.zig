@@ -117,6 +117,7 @@ pub const Bar = struct {
 
         // Damage the buffer node to trigger a redraw
         self.scene_buffer.setBuffer(self.wlr_buffer);
+        self.output.wlr_output.scheduleFrame();
     }
 
     pub fn drawText(self: *Bar, pixels: [*]u32, text_str: []const u8, x: i32, y: i32, color_raw: c.pixman_color_t) void {

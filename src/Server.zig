@@ -639,29 +639,33 @@ pub const Server = struct {
                     _ = server.output_layout.addAuto(output.wlr_output) catch {};
                 },
                 .mirror => {
-                    _ = server.output_layout.add(output.wlr_output, 0, 0) catch {};
+                    // In mirror mode, all outputs are at (0,0) with the same size
+                    server.output_layout.add(output.wlr_output, 0, 0) catch {};
                 },
             }
 
-            // Re-assign workspace if none is visible on this output
-            var has_ws = false;
+            // Assign a workspace if none is visible
+            var has_visible = false;
             for (server.workspaces) |ws| {
                 if (ws.visible_on == output) {
-                    has_ws = true;
+                    has_visible = true;
+                    ws.setVisible(output); // Ensure scene tree is enabled
                     break;
                 }
             }
-            if (!has_ws) {
+
+            if (!has_visible) {
+                // Find first unassigned workspace
                 for (server.workspaces) |ws| {
                     if (ws.visible_on == null) {
-                        ws.visible_on = output;
+                        ws.setVisible(output);
                         break;
                     }
                 }
             }
-        }
+                }
 
-        // 2. Update workspace positions and visibility
+        // 2. Refresh all workspaces' arrangements and visibility
         for (server.workspaces) |ws| {
             if (ws.visible_on) |output| {
                 if (server.display_mode == .discrete) {
@@ -694,6 +698,15 @@ pub const Server = struct {
         }
 
         server.refreshBars();
+        server.scheduleFrame();
+    }
+
+    pub fn scheduleFrame(server: *Server) void {
+        var it = server.outputs.link.next;
+        while (it != &server.outputs.link) : (it = it.?.next) {
+            const output: *Output = @fieldParentPtr("link", it.?);
+            output.wlr_output.scheduleFrame();
+        }
     }
 
     pub fn refreshBars(server: *Server) void {
@@ -1391,6 +1404,8 @@ pub const Server = struct {
                 toplevel.updateLayout(new_width, new_height);
             },
         }
+
+        server.scheduleFrame();
     }
 
     fn cursorButton(
