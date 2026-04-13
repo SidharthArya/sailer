@@ -1031,9 +1031,6 @@ pub const Server = struct {
 
             toplevel.scene_tree.node.raiseToTop();
             
-            toplevel.urgent = false;
-            toplevel.refreshBorderColor(true);
-            
             toplevel.focus_link.remove();
             toplevel.workspace.focus_history.prepend(toplevel);
 
@@ -1041,6 +1038,17 @@ pub const Server = struct {
             if (toplevel.foreign_toplevel) |handle| {
                 handle.setActivated(true);
             }
+        }
+
+        if (toplevel.urgent) {
+            toplevel.urgent = false;
+            toplevel.refreshBorderColor(true);
+            server.refreshBars();
+            if (server.workspace_protocol) |wp| {
+                wp.notifyUrgent(toplevel.workspace);
+            }
+        } else if (!already_active) {
+            toplevel.refreshBorderColor(true);
         }
 
         server.focused_workspace = toplevel.workspace;
