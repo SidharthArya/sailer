@@ -626,10 +626,10 @@ pub const Popup = struct {
         // In Sailer, Popups don't have a direct server pointer, 
         // but we can get it from the parent toplevel if needed.
         // However, we can just find the server from the xdg_surface data.
-        if (View.fromXdgSurface(popup.xdg_popup.base)) |toplevel| {
+        if (fromXdgSurface(popup.xdg_popup.base)) |toplevel| {
             toplevel.server.scheduleFrame();
         } else if (wlr.XdgSurface.tryFromWlrSurface(popup.xdg_popup.parent.?)) |parent_xdg| {
-             if (View.fromXdgSurface(parent_xdg)) |toplevel| {
+             if (fromXdgSurface(parent_xdg)) |toplevel| {
                  toplevel.server.scheduleFrame();
              }
         }

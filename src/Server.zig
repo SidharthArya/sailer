@@ -640,7 +640,7 @@ pub const Server = struct {
                 },
                 .mirror => {
                     // In mirror mode, all outputs are at (0,0) with the same size
-                    server.output_layout.add(output.wlr_output, 0, 0) catch {};
+                    _ = server.output_layout.add(output.wlr_output, 0, 0) catch {};
                 },
             }
 
