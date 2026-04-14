@@ -44,9 +44,10 @@ pub const Battery = struct {
             color = Theme.yellow;
         }
 
+        const scale = bar.output.wlr_output.scale;
         // Draw to the left of the clock (clock is at bar.width - 60)
-        // We'll place battery at bar.width - 140
-        bar.drawText(pixels, status_str, bar.width - 150, 17, color);
+        // We'll place battery at bar.width - 150
+        bar.drawText(pixels, status_str, bar.width - @as(i32, @intFromFloat(150.0 * scale)), @as(i32, @intFromFloat(17.0 * scale)), color);
     }
 
     fn getPropertyDouble(prop_name: [*c]const u8) !f64 {

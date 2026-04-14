@@ -15,8 +15,9 @@ pub const Clock = struct {
         var time_buf: [32]u8 = undefined;
         const time_str = std.fmt.bufPrint(&time_buf, "{d:0>2}:{d:0>2}", .{ tm_local.tm_hour, tm_local.tm_min }) catch "00:00";
         
+        const scale = bar.output.wlr_output.scale;
         // Draw at the right side of the bar
-        bar.drawText(pixels, time_str, bar.width - 60, 17, Theme.blue);
+        bar.drawText(pixels, time_str, bar.width - @as(i32, @intFromFloat(60.0 * scale)), @as(i32, @intFromFloat(17.0 * scale)), Theme.blue);
     }
 };
 

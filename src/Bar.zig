@@ -30,13 +30,16 @@ pub const Bar = struct {
     pub fn create(server: *Server, output: *Output, font_path: []const u8, config: Config.BarConfig) !*Bar {
         const bar = try std.heap.c_allocator.create(Bar);
 
-        const renderer = try Renderer.init(font_path, config.font_size);
+        // Pre-calculate scaled font size
+        const scale = output.wlr_output.scale;
+        const font_size = @as(u32, @intFromFloat(@as(f32, @floatFromInt(config.font_size)) * scale));
+        const renderer = try Renderer.init(font_path, font_size);
 
         var box: wlr.Box = undefined;
         server.output_layout.getBox(output.wlr_output, &box);
 
-        const width = box.width;
-        const height = config.height;
+        const width = @as(i32, @intFromFloat(@as(f32, @floatFromInt(box.width)) * scale));
+        const height = @as(i32, @intFromFloat(@as(f32, @floatFromInt(config.height)) * scale));
 
         // Use a manual SHM buffer to guarantee CPU access
         // TODO: The SHM buffer is recreated on every output resize — consider resizing in-place instead.
@@ -93,7 +96,7 @@ pub const Bar = struct {
             .height = @intCast(self.height),
         }});
 
-        var x_offset: i32 = 12;
+        var x_offset: i32 = @as(i32, @intFromFloat(12.0 * self.output.wlr_output.scale));
         Workspaces.render(
             self,
             pix,
@@ -102,9 +105,10 @@ pub const Bar = struct {
         );
 
         if (self.server.marked_mode) {
-            x_offset += 8;
-            self.drawText(pixels, "[M]", x_offset, 16, Theme.pink);
-            x_offset += 32;
+            const scale = self.output.wlr_output.scale;
+            x_offset += @as(i32, @intFromFloat(8.0 * scale));
+            self.drawText(pixels, "[M]", x_offset, @as(i32, @intFromFloat(16.0 * scale)), Theme.pink);
+            x_offset += @as(i32, @intFromFloat(32.0 * scale));
         }
 
         // Battery
@@ -124,7 +128,7 @@ pub const Bar = struct {
         self.renderer.drawText(pixels, self.width, text_str, x, y, color_raw, self.width, self.height);
     }
     pub fn workspaceAt(self: *Bar, lx: i32, ly: i32) ?usize {
-        return Workspaces.workspaceAt(self.server, self.height, lx, ly);
+        return Workspaces.workspaceAt(self.server, self.output.wlr_output, self.height, lx, ly);
     }
 
     pub fn hitTestWorkspace(self: *Bar, gx: f64, gy: f64) ?usize {

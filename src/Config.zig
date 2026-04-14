@@ -59,6 +59,11 @@ pub const LayoutKind = enum {
     smart_view,
 };
 
+pub const OutputConfig = struct {
+    name: []const u8 = "",
+    scale: f32 = 1.0,
+};
+
 pub const BarConfig = struct {
     enabled: bool = true,
     exclusive: bool = true,
@@ -142,6 +147,7 @@ pub const Config = struct {
     repeat_delay: u32 = 600,
     focus_on_activation: bool = true,
     spawn_once: []const []const u8 = &.{},
+    outputs: []OutputConfig = &.{},
 
     pub fn load(allocator: std.mem.Allocator) !Config {
         const home = std.process.getEnvVarOwned(allocator, "HOME") catch return error.NoHome;
@@ -234,7 +240,8 @@ pub const Config = struct {
             \\  },
             \\  "focus_on_activation": false,
             \\  "keybindings": [],
-            \\  "spawn_once": []
+            \\  "spawn_once": [],
+            \\  "outputs": []
             \\}
         ;
         const parsed = try std.json.parseFromSlice(Config, allocator, default_json, .{ .ignore_unknown_fields = true });

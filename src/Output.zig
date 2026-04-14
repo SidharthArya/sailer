@@ -4,6 +4,7 @@ const wl = @import("wayland").server.wl;
 const wlr = @import("wlroots");
 const Server = @import("Server.zig").Server;
 const Bar = @import("Bar.zig").Bar;
+const c = @import("c.zig").c;
 
 pub const Output = struct {
     server: *Server,
@@ -31,6 +32,23 @@ pub const Output = struct {
         output.listeners.frame = .init(Output.handleFrame);
         output.listeners.request_state = .init(Output.handleRequestState);
         output.listeners.destroy = .init(Output.handleDestroy);
+
+        // 0. Apply configuration (Scale/DPI)
+        var scale: f32 = 1.0;
+        for (server.config.outputs) |oc| {
+            if (std.mem.span(wlr_output.name).len > 0 and std.mem.eql(u8, std.mem.span(wlr_output.name), oc.name)) {
+                scale = oc.scale;
+                break;
+            }
+        }
+
+        if (scale != 1.0) {
+            var state = wlr.Output.State.init();
+            defer state.finish();
+            // Use the C API as it's more reliable for fractional scales in some wlroots versions
+            c.wlr_output_state_set_scale(@ptrCast(&state), scale);
+            _ = wlr_output.commitState(&state);
+        }
 
         // 1. Register our listeners FIRST
         wlr_output.events.frame.add(&output.listeners.frame);
