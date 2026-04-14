@@ -249,6 +249,11 @@ pub const IpcServer = struct {
             std.posix.close(fd);
             return;
         }
+        if (std.mem.eql(u8, cmd, "get_outputs")) {
+            try self.handleGetOutputs(fd);
+            std.posix.close(fd);
+            return;
+        }
 
         // Validate spawn before queuing
         if (std.mem.eql(u8, cmd, "spawn")) {
@@ -522,6 +527,53 @@ pub const IpcServer = struct {
             if (i > 0) try out.appendSlice(self.allocator, ",");
             try out.writer(self.allocator).print("{{\"index\":{d},\"name\":\"{s}\",\"focused\":{},\"has_views\":{},\"layout\":\"{s}\"}}", .{ i + 1, ws.name, focused, has_views, ws.layout.name() });
         }
+        try out.appendSlice(self.allocator, "]}\n");
+        _ = std.posix.write(fd, out.items) catch {};
+    }
+
+    fn handleGetOutputs(self: *IpcServer, fd: std.posix.fd_t) !void {
+        const wlr = @import("wlroots");
+        const OutputMod = @import("Output.zig");
+        var out = std.ArrayListUnmanaged(u8){};
+        defer out.deinit(self.allocator);
+        try out.appendSlice(self.allocator, "{\"ok\":true,\"outputs\":[");
+
+        var first_output = true;
+        var it = self.server.outputs.link.next;
+        while (it != &self.server.outputs.link) : (it = it.?.next) {
+            const output: *OutputMod.Output = @fieldParentPtr("link", it.?);
+            const wlr_output = output.wlr_output;
+
+            if (!first_output) try out.appendSlice(self.allocator, ",");
+            first_output = false;
+
+            try out.appendSlice(self.allocator, "{");
+            try out.writer(self.allocator).print("\"name\":\"{s}\",", .{std.mem.span(wlr_output.name)});
+            try out.writer(self.allocator).print("\"scale\":{d:.2},", .{wlr_output.scale});
+
+            // Current resolution
+            try out.appendSlice(self.allocator, "\"current_resolution\":");
+            if (wlr_output.current_mode) |mode| {
+                try out.writer(self.allocator).print("{{\"width\":{d},\"height\":{d},\"refresh\":{d}}},", .{ mode.width, mode.height, mode.refresh });
+            } else {
+                try out.writer(self.allocator).print("{{\"width\":{d},\"height\":{d},\"refresh\":0}},", .{ wlr_output.width, wlr_output.height });
+            }
+
+            // Available resolutions
+            try out.appendSlice(self.allocator, "\"available_resolutions\":[");
+            var first_mode = true;
+            var mode_it = wlr_output.modes.link.next;
+            while (mode_it != &wlr_output.modes.link) : (mode_it = mode_it.?.next) {
+                const mode: *wlr.Output.Mode = @fieldParentPtr("link", mode_it.?);
+                if (!first_mode) try out.appendSlice(self.allocator, ",");
+                first_mode = false;
+                try out.writer(self.allocator).print("{{\"width\":{d},\"height\":{d},\"refresh\":{d}}}", .{ mode.width, mode.height, mode.refresh });
+            }
+            try out.appendSlice(self.allocator, "]");
+
+            try out.appendSlice(self.allocator, "}");
+        }
+
         try out.appendSlice(self.allocator, "]}\n");
         _ = std.posix.write(fd, out.items) catch {};
     }
