@@ -2,6 +2,7 @@ const std = @import("std");
 const wl = @import("wayland").server.wl;
 const wlr = @import("wlroots");
 const xkb = @import("xkbcommon");
+const builtin = @import("builtin");
 
 const Output = @import("Output.zig").Output;
 const View = @import("View.zig");
@@ -698,15 +699,34 @@ pub const Server = struct {
         }
 
         server.refreshBars();
-        server.scheduleFrame();
+        if (builtin.mode == .Debug) {
+            server.scheduleFrame();
+        } else {
+            server.forceDamage();
+        }
     }
 
     pub fn scheduleFrame(server: *Server) void {
         var it = server.outputs.link.next;
         while (it != &server.outputs.link) : (it = it.?.next) {
+            if (it == null) break;
             const output: *Output = @fieldParentPtr("link", it.?);
             output.wlr_output.scheduleFrame();
         }
+    }
+
+    /// Force a full redraw on all outputs. Use sparingly as this is CPU intensive.
+    pub fn forceDamage(server: *Server) void {
+        var it = server.outputs.link.next;
+        while (it != &server.outputs.link) : (it = it.?.next) {
+            if (it == null) break;
+            const output: *Output = @fieldParentPtr("link", it.?);
+            if (server.scene.getSceneOutput(output.wlr_output)) |so| {
+                const so_ptr: *c.wlr_scene_output = @ptrCast(so);
+                c.wlr_damage_ring_add_whole(&so_ptr.damage_ring);
+            }
+        }
+        server.scheduleFrame();
     }
 
     pub fn refreshBars(server: *Server) void {
@@ -1049,6 +1069,7 @@ pub const Server = struct {
             }
         } else if (!already_active) {
             toplevel.refreshBorderColor(true);
+            server.refreshBars();
         }
 
         server.focused_workspace = toplevel.workspace;

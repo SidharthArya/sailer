@@ -20,6 +20,8 @@ pub const Toplevel = struct {
     x: i32 = 0,
     y: i32 = 0,
     width_percent: i32 = 50,
+    width: i32 = 0,
+    height: i32 = 0,
     is_maximized: bool = false,
     is_fullscreen: bool = false,
     is_floating: bool = false,
@@ -148,6 +150,9 @@ pub const Toplevel = struct {
     }
 
     pub fn updateLayout(self: *Toplevel, width: i32, height: i32) void {
+        self.width = width;
+        self.height = height;
+
         const bw = if (self.is_fullscreen) 0 else self.border_width;
 
         self.xdg_surface_tree.node.setPosition(bw, bw);
@@ -180,17 +185,16 @@ pub const Toplevel = struct {
         }
 
         if (toplevel.mapped) {
-            // For scratchpad (floating) windows, arrange() skips updateLayout.
-            // Update borders directly using the committed geometry so they wrap
-            // the actual window size rather than the 800×600 fallback from handleMap.
+            const geo = toplevel.xdg_toplevel.base.geometry;
+            const size_changed = (geo.width + 2 * toplevel.border_width != toplevel.width) or (geo.height + 2 * toplevel.border_width != toplevel.height);
+
             if (toplevel.scratchpad_id != 0) {
-                const geo = toplevel.xdg_toplevel.base.geometry;
                 if (geo.width > 0 and geo.height > 0) {
                     const bw = toplevel.border_width;
-                    toplevel.updateLayout(geo.width + 2 * bw, geo.height + 2 * bw);
+                    if (size_changed) {
+                        toplevel.updateLayout(geo.width + 2 * bw, geo.height + 2 * bw);
+                    }
 
-                    // Center on first show — deferred here because the real size
-                    // is only available after the client's first commit.
                     if (toplevel.needs_centering) {
                         toplevel.needs_centering = false;
                         const area = toplevel.workspace.getUsableArea();
@@ -202,7 +206,10 @@ pub const Toplevel = struct {
                     }
                 }
             }
-            toplevel.workspace.arrange();
+
+            if (toplevel.xdg_toplevel.base.initial_commit or size_changed or toplevel.needs_centering) {
+                toplevel.workspace.arrange();
+            }
         }
 
         if (toplevel.foreign_toplevel) |handle| {

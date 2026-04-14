@@ -104,8 +104,6 @@ pub const Workspace = struct {
                 self.scene_tree.node.setPosition(out_box.x, out_box.y + self.server.bar_height);
             }
         }
-
-        self.server.refreshBars();
     }
 
     pub fn getUsableArea(self: *Workspace) wlr.Box {
