@@ -81,7 +81,7 @@ pub const IpcServer = struct {
     fn isKnownMutatingCommand(cmd: []const u8) bool {
         if (isSimpleAction(cmd)) return true;
         const arg_commands = [_][]const u8{
-            "spawn", "focus_window", "set_urgent", "switch_workspace", "move_to_workspace", "type_text", "set_display_mode",
+            "spawn", "focus_window", "set_urgent", "switch_workspace", "move_to_workspace", "type_text", "set_display_mode", "set_scale",
         };
         for (arg_commands) |c| {
             if (std.mem.eql(u8, cmd, c)) return true;
@@ -487,6 +487,56 @@ pub const IpcServer = struct {
             self.server.display_mode = mode;
             self.server.updateLayout();
             _ = std.posix.write(fd, "{\"ok\":true}\n") catch {};
+        } else if (std.mem.eql(u8, cmd, "set_scale")) {
+            const output_name = (args.object.get("output") orelse {
+                _ = std.posix.write(fd, "{\"ok\":false,\"error\":\"missing output name\"}\n") catch {};
+                return;
+            }).string;
+            const scale_val = args.object.get("scale") orelse {
+                _ = std.posix.write(fd, "{\"ok\":false,\"error\":\"missing scale\"}\n") catch {};
+                return;
+            };
+            const scale: f32 = switch (scale_val) {
+                .float => |f| @as(f32, @floatCast(f)),
+                .integer => |i| @as(f32, @floatFromInt(i)),
+                .string => |s| std.fmt.parseFloat(f32, s) catch {
+                    _ = std.posix.write(fd, "{\"ok\":false,\"error\":\"invalid scale value\"}\n") catch {};
+                    return;
+                },
+                else => {
+                    _ = std.posix.write(fd, "{\"ok\":false,\"error\":\"invalid scale type\"}\n") catch {};
+                    return;
+                },
+            };
+
+            const OutputMod = @import("Output.zig");
+            const wlr = @import("wlroots");
+            const c = @import("c.zig").c;
+
+            var found = false;
+            var it = self.server.outputs.link.next;
+            while (it != &self.server.outputs.link) : (it = it.?.next) {
+                const output: *OutputMod.Output = @fieldParentPtr("link", it.?);
+                if (std.mem.eql(u8, std.mem.span(output.wlr_output.name), output_name)) {
+                    var state = wlr.Output.State.init();
+                    defer state.finish();
+                    c.wlr_output_state_set_scale(@ptrCast(&state), scale);
+                    if (output.wlr_output.commitState(&state)) {
+                        found = true;
+                    } else {
+                        _ = std.posix.write(fd, "{\"ok\":false,\"error\":\"failed to commit output state\"}\n") catch {};
+                        return;
+                    }
+                    break;
+                }
+            }
+
+            if (found) {
+                self.server.updateLayout();
+                _ = std.posix.write(fd, "{\"ok\":true}\n") catch {};
+            } else {
+                _ = std.posix.write(fd, "{\"ok\":false,\"error\":\"output not found\"}\n") catch {};
+            }
         }
     }
 
